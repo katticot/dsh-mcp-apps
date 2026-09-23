@@ -2,6 +2,27 @@
   "name": "dsh-mcp-apps",
   "version": "0.1.0",
   "description": "Universal MCP Apps Host & UI Plugin for DeepSeek Harness (DSH)",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "cordis-plugin",
+    "mcp",
+    "mcp-apps",
+    "modelcontextprotocol",
+    "sep-1865"
+  ],
+  "author": "katticot",
+  "homepage": "https://github.com/katticot/dsh-mcp-apps#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/katticot/dsh-mcp-apps.git"
+  },
+  "bugs": {
+    "url": "https://github.com/katticot/dsh-mcp-apps/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
