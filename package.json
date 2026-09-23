@@ -53,9 +53,13 @@
     "README.md",
     "LICENSE"
   ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "build": "tsdown",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "pnpm test && pnpm build"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
