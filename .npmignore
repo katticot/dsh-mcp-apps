@@ -1,0 +1,9 @@
+src/
+tests/
+tsdown.config.ts
+tsconfig.json
+pnpm-workspace.yaml
+.github/
+.git/
+.gitignore
+*.log
