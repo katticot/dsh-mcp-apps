@@ -500,17 +500,89 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     })
   })
 
-  it('supports resources/read-raw returning raw ReadResourceResult unchanged', async () => {
+  it('supports resources/read-raw returning raw ReadResourceResult unchanged for an authorized session', async () => {
+    const chartDef = registeredToolDefs.find(d => d.name === 'mcp__analytics__render_chart')
+    const execResult = await chartDef.execute({}, { agent: { id: 'agent-1' }, callId: 'c-1' })
+    const sessionToken = execResult._sessionToken
+
     const rawResult = {
       contents: [
         { uri: 'resource://data', text: 'raw data' },
         { uri: 'resource://data2', blob: 'YmxvYg==' },
       ],
     }
-    vi.spyOn(ServerPool.prototype, 'readResourceRaw').mockResolvedValue(rawResult as any)
+    const readRawSpy = vi.spyOn(ServerPool.prototype, 'readResourceRaw').mockResolvedValue(rawResult as any)
 
-    const response = await rpcHandler('resources/read-raw', { server: 'analytics', uri: 'resource://data' })
+    const response = await rpcHandler('resources/read-raw', { sessionToken, server: 'analytics', uri: 'resource://data' })
     expect(response.ok).toBe(true)
     expect(response.value).toEqual(rawResult)
+    expect(readRawSpy).toHaveBeenCalledWith('analytics', 'resource://data', undefined)
+  })
+
+  describe('session-bound resource endpoints', () => {
+    const endpoints: Array<{ endpoint: string; extraParams: Record<string, unknown> }> = [
+      { endpoint: 'resources/read-raw', extraParams: { uri: 'resource://data' } },
+      { endpoint: 'resources/read', extraParams: { uri: 'ui://analytics/chart' } },
+      { endpoint: 'resources/list', extraParams: {} },
+    ]
+
+    for (const { endpoint, extraParams } of endpoints) {
+      describe(endpoint, () => {
+        it('rejects a call with no token', async () => {
+          const res = await rpcHandler(endpoint, { server: 'analytics', ...extraParams })
+          expect(res).toEqual({
+            ok: false,
+            error: { code: 'unauthorized', message: 'Missing session token' },
+          })
+        })
+
+        it('rejects a call with an invalid token', async () => {
+          const res = await rpcHandler(endpoint, { sessionToken: 'bogus-token', server: 'analytics', ...extraParams })
+          expect(res).toEqual({
+            ok: false,
+            error: { code: 'unauthorized', message: 'Invalid or expired session token' },
+          })
+        })
+
+        it('rejects a call with an expired token', async () => {
+          const chartDef = registeredToolDefs.find(d => d.name === 'mcp__analytics__render_chart')
+          const execResult = await chartDef.execute({}, { agent: { id: 'agent-1' }, callId: 'c-1' })
+          const sessionToken = execResult._sessionToken
+
+          const store = (toolManager as any).sessionStore
+          const session = store.get(sessionToken)
+          session.expiresAt = Date.now() - 1000
+
+          const res = await rpcHandler(endpoint, { sessionToken, server: 'analytics', ...extraParams })
+          expect(res).toEqual({
+            ok: false,
+            error: { code: 'unauthorized', message: 'Invalid or expired session token' },
+          })
+        })
+
+        it('rejects a call targeting a mismatched server', async () => {
+          const chartDef = registeredToolDefs.find(d => d.name === 'mcp__analytics__render_chart')
+          const execResult = await chartDef.execute({}, { agent: { id: 'agent-1' }, callId: 'c-1' })
+          const sessionToken = execResult._sessionToken
+
+          const res = await rpcHandler(endpoint, { sessionToken, server: 'other_server', ...extraParams })
+          expect(res.ok).toBe(false)
+          expect((res as any).error.code).toBe('forbidden')
+        })
+
+        it('allows an authorized call bound to the session server', async () => {
+          vi.spyOn(ServerPool.prototype, 'readResourceRaw').mockResolvedValue({ contents: [] } as any)
+          vi.spyOn(ServerPool.prototype, 'readResource').mockResolvedValue({ uri: 'ui://analytics/chart', html: '<html></html>' } as any)
+          vi.spyOn(ServerPool.prototype, 'listResources').mockResolvedValue({ resources: [] } as any)
+
+          const chartDef = registeredToolDefs.find(d => d.name === 'mcp__analytics__render_chart')
+          const execResult = await chartDef.execute({}, { agent: { id: 'agent-1' }, callId: 'c-1' })
+          const sessionToken = execResult._sessionToken
+
+          const res = await rpcHandler(endpoint, { sessionToken, server: 'analytics', ...extraParams })
+          expect(res.ok).toBe(true)
+        })
+      })
+    }
   })
 })
