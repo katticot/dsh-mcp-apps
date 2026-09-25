@@ -132,6 +132,7 @@ export class ServerPool {
     return this.toolManager.getUiToolsSnapshot()
   }
 
+
   async listResources(serverName?: string): Promise<unknown> {
     if (serverName) {
       const instance = this.servers.get(serverName)

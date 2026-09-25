@@ -258,24 +258,62 @@ describe('ServerToolManager', () => {
     expect(registeredNames).not.toContain('mcp__test-srv__app_secret_button')
   })
 
-  it('returns matching server for raw or public name and undefined for unknown tool in findServerForTool', () => {
+  it('cleans up app-only tool from uiTools when removed on re-sync and on evictServer', () => {
     const mockToolsService = { register: vi.fn(() => vi.fn()) }
     const sessionStore = new AppSessionStore()
     const manager = new ServerToolManager(mockToolsService, sessionStore)
-    const pool = new ServerPool({} as any, { servers: {} }, manager)
-    ;(pool as any).servers.set('other-srv', {})
 
-    manager.syncServerTools('weather-srv', {} as any, [
-      {
-        name: 'get_forecast',
-        inputSchema: { type: 'object' },
-        _meta: { ui: { resourceUri: 'ui://weather/forecast' } },
+    const appOnlyTool: Tool = {
+      name: 'app_secret_button',
+      inputSchema: { type: 'object' },
+      _meta: {
+        ui: {
+          resourceUri: 'ui://test/secret',
+          visibility: ['app'],
+        },
       },
-    ])
+    }
+    const regularUiTool: Tool = {
+      name: 'chart',
+      inputSchema: { type: 'object' },
+      _meta: {
+        ui: {
+          resourceUri: 'ui://test/chart',
+        },
+      },
+    }
 
-    expect(pool.findServerForTool('get_forecast')).toBe('weather-srv')
-    expect(pool.findServerForTool('mcp__weather-srv__get_forecast')).toBe('weather-srv')
-    expect(pool.findServerForTool('unknown_tool')).toBeUndefined()
+    manager.syncServerTools('test-srv', {} as any, [appOnlyTool, regularUiTool], {
+      transport: 'stdio',
+      command: 'srv',
+      allowAppToolCalls: true,
+    })
+
+    let snapshot = manager.getUiToolsSnapshot()
+    expect(snapshot).toHaveLength(2)
+    expect(snapshot.map(t => t.rawName)).toEqual(expect.arrayContaining(['app_secret_button', 'chart']))
+
+    // 1. Re-sync without app_secret_button
+    manager.syncServerTools('test-srv', {} as any, [regularUiTool], {
+      transport: 'stdio',
+      command: 'srv',
+      allowAppToolCalls: true,
+    })
+    snapshot = manager.getUiToolsSnapshot()
+    expect(snapshot).toHaveLength(1)
+    expect(snapshot[0].rawName).toBe('chart')
+
+    // 2. Re-add app_secret_button and evictServer
+    manager.syncServerTools('test-srv', {} as any, [appOnlyTool], {
+      transport: 'stdio',
+      command: 'srv',
+      allowAppToolCalls: true,
+    })
+    expect(manager.getUiToolsSnapshot()).toHaveLength(1)
+    expect(manager.getUiToolsSnapshot()[0].rawName).toBe('app_secret_button')
+
+    manager.evictServer('test-srv')
+    expect(manager.getUiToolsSnapshot()).toHaveLength(0)
   })
 
   it('skips a bad tool mid-list without failing remaining tools', () => {
@@ -392,5 +430,25 @@ describe('ServerToolManager', () => {
 
     // Should still have been called only once, ignoring stale v1_tool
     expect(syncSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns matching server for raw or public name and undefined for unknown tool in findServerForTool', () => {
+    const mockToolsService = { register: vi.fn(() => vi.fn()) }
+    const sessionStore = new AppSessionStore()
+    const manager = new ServerToolManager(mockToolsService, sessionStore)
+    const pool = new ServerPool({} as any, { servers: {} }, manager)
+    ;(pool as any).servers.set('other-srv', {})
+
+    manager.syncServerTools('weather-srv', {} as any, [
+      {
+        name: 'get_forecast',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { resourceUri: 'ui://weather/forecast' } },
+      },
+    ])
+
+    expect(pool.findServerForTool('get_forecast')).toBe('weather-srv')
+    expect(pool.findServerForTool('mcp__weather-srv__get_forecast')).toBe('weather-srv')
+    expect(pool.findServerForTool('unknown_tool')).toBeUndefined()
   })
 })
