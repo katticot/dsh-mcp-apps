@@ -142,6 +142,14 @@ export class ServerPool {
     this.refreshSeq.set(serverName, seq)
 
     const toolsResult = await client.listTools()
+
+    // Guard against a zombie refresh: listTools() may resolve after this
+    // server was stopped, evicted, or replaced by a reconnect while the
+    // request was in flight. Only apply the result if this client instance
+    // is still the active one for this server and the lifecycle is alive.
+    if (this.lifecycleController.signal.aborted) return
+    if (this.servers.get(serverName)?.client !== client) return
+
     if (toolsResult.tools.length > MAX_TOOLS_PER_SERVER) {
       throw new Error(`Server "${serverName}" exceeded maximum tool limit (${MAX_TOOLS_PER_SERVER})`)
     }
