@@ -21,6 +21,9 @@ export interface ResourceResponse {
   permissions?: Record<string, string[]>
 }
 
+export const MAX_TOOLS_PER_SERVER = 256
+export const MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
+
 export class ServerPool {
   private ctx: Context
   private config: Config
@@ -140,6 +143,9 @@ export class ServerPool {
     this.refreshSeq.set(serverName, seq)
 
     const toolsResult = await client.listTools()
+    if (toolsResult.tools.length > MAX_TOOLS_PER_SERVER) {
+      throw new Error(`Server "${serverName}" exceeded maximum tool limit (${MAX_TOOLS_PER_SERVER})`)
+    }
     const lastSeq = this.lastAppliedSeq.get(serverName) ?? 0
     if (seq < lastSeq) {
       // Outdated response; discard
@@ -174,7 +180,7 @@ export class ServerPool {
     return { resources: allResources }
   }
 
-  async readResource(serverName?: string, uri?: string, _signal?: AbortSignal): Promise<ResourceResponse> {
+  async readResource(serverName?: string, uri?: string, signal?: AbortSignal): Promise<ResourceResponse> {
     if (!uri) throw new Error('Missing resource URI')
 
     // If serverName is omitted, look up server owning this resource
@@ -210,6 +216,10 @@ export class ServerPool {
 
     if (!html) {
       throw new Error(`Resource ${uri} returned neither text nor blob HTML`)
+    }
+
+    if (html.length > MAX_RESOURCE_SIZE_BYTES) {
+      throw new Error(`Resource ${uri} exceeded maximum allowed size of 10MB`)
     }
 
     const meta = (item as { _meta?: unknown; meta?: unknown })._meta ?? (item as { meta?: unknown }).meta
