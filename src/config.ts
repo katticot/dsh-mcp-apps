@@ -35,6 +35,8 @@ export interface RemoteServerConfig {
   allowedPermissions?: string[]
   /** Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read. */
   allowedVars?: string[]
+  /** Maximum size in bytes of a single incoming message (an SSE event, a streamable-http response body, or a websocket message). Default 16MB. */
+  maxMessageBytes?: number
 }
 
 export interface IpcServerConfig {
@@ -93,6 +95,7 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   allowAppToolCalls: AppToolCallsSchema,
   allowedPermissions: Schema.array(String).default([]),
   allowedVars: Schema.array(String).default([]),
+  maxMessageBytes: Schema.number().min(1).default(16 * 1024 * 1024),
 })
 
 const IpcSchema: Schema<IpcServerConfig> = Schema.object({
