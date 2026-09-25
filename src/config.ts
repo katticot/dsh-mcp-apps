@@ -126,6 +126,16 @@ export const Config: Schema<Config> = Schema.object({
 import { DSH_ENV_PREFIX, SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'
 
 /**
+ * Agent-socket style variables that `scrubbedParentEnv()` does not strip
+ * (they don't match DSH_* or the KEY/PASSWORD/SECRET/TOKEN pattern) but that
+ * still grant access to a live credential agent if leaked to a spawned MCP
+ * server or forwarded remote header. Blocked from `${VAR}` expansion here,
+ * and stripped from the inherited environment before spawning (see
+ * `createStdioTransport`), unless explicitly allow-listed.
+ */
+export const EXTRA_BLOCKED_ENV_VARS = new Set(['SSH_AUTH_SOCK', 'GPG_AGENT_INFO'])
+
+/**
  * Expands environment variable expressions like `${FOO}` or `${FOO:-default}`
  * using the provided environment (defaulting to process.env).
  * Blocks reading DSH_* and sensitive secret patterns unless explicitly included in allowedVars.
@@ -136,7 +146,7 @@ export function expandEnvString(
   allowedVars?: Set<string>
 ): string {
   return value.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)(?::-([^}]*))?\}/g, (_, varName, defaultValue) => {
-    const isBlocked = (varName.startsWith(DSH_ENV_PREFIX) || SENSITIVE_ENV_PATTERN.test(varName)) && !allowedVars?.has(varName)
+    const isBlocked = (varName.startsWith(DSH_ENV_PREFIX) || SENSITIVE_ENV_PATTERN.test(varName) || EXTRA_BLOCKED_ENV_VARS.has(varName)) && !allowedVars?.has(varName)
     if (isBlocked) {
       return defaultValue ?? ''
     }
