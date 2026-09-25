@@ -208,6 +208,94 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     expect(callToolSpy).toHaveBeenCalledWith('analytics', 'export_csv', { format: 'csv' }, undefined)
   })
 
+  it('routes through ctx.approval.request when allowAppToolCalls is approve', async () => {
+    const approveConfig = {
+      servers: {
+        secure_srv: {
+          transport: 'stdio' as const,
+          command: 'sec-srv',
+          allowAppToolCalls: 'approve' as const,
+        },
+      },
+    }
+
+    const mockApproval = {
+      request: vi.fn().mockResolvedValue('allowed-once'),
+    }
+    const mockAgents = {
+      get: vi.fn().mockReturnValue({ id: 'agent-sec' }),
+    }
+
+    let secureRpcHandler: any
+    const mockCtx = {
+      tools: {
+        register: vi.fn((def: any) => {
+          registeredToolDefs.push(def)
+          return vi.fn()
+        }),
+      },
+      connection: {
+        register: vi.fn((_ctx: any, _path: string, handler: any) => {
+          secureRpcHandler = handler
+          return vi.fn()
+        }),
+      },
+      effect: vi.fn((fn: () => any) => fn()),
+      approval: mockApproval,
+      agents: mockAgents,
+    }
+
+    apply(mockCtx as any, approveConfig as any)
+
+    // Execute tool on secure_srv
+    const secureTools: Tool[] = [
+      {
+        name: 'secure_chart',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { resourceUri: 'ui://secure/chart' } },
+      },
+      {
+        name: 'write_db',
+        inputSchema: { type: 'object' },
+      },
+    ]
+
+    toolManager.syncServerTools('secure_srv', mockClient as any, secureTools, approveConfig.servers.secure_srv)
+
+    const chartDef = registeredToolDefs.find(d => d.name === 'mcp__secure_srv__secure_chart')
+    const execResult = await chartDef.execute({}, { agent: { id: 'agent-sec' }, callId: 'c-sec-1' })
+    const sessionToken = execResult._sessionToken
+
+    // Call write_db which requires approval
+    const res = await secureRpcHandler('tools/call', {
+      sessionToken,
+      name: 'write_db',
+      arguments: { sql: 'UPDATE table SET val=1' },
+    })
+
+    expect(mockApproval.request).toHaveBeenCalledWith(expect.objectContaining({
+      agent: { id: 'agent-sec' },
+      toolName: 'write_db',
+      callId: 'c-sec-1',
+    }))
+    expect(res).toEqual({
+      ok: true,
+      value: {
+        content: [{ type: 'text', text: 'Success: secure_srv.write_db' }],
+        args: { sql: 'UPDATE table SET val=1' },
+      },
+    })
+
+    // If approval returns 'rejected', tool call should be rejected
+    mockApproval.request.mockResolvedValueOnce('rejected')
+    const rejectedRes = await secureRpcHandler('tools/call', {
+      sessionToken,
+      name: 'write_db',
+    })
+    expect(rejectedRes.ok).toBe(false)
+    expect(rejectedRes.error.code).toBe('forbidden')
+  })
+
   it('disposes sessionStore when host plugin unloads', async () => {
     const store = (toolManager as any).sessionStore
     const disposeSpy = vi.spyOn(store, 'dispose')

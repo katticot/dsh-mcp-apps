@@ -7,6 +7,8 @@ export interface ReconnectOptions {
   backoffFactor?: number
 }
 
+export type AppToolCallsSetting = 'deny' | 'approve' | 'allow'
+
 export interface StdioServerConfig {
   transport: 'stdio'
   command: string
@@ -14,7 +16,7 @@ export interface StdioServerConfig {
   env?: Record<string, string>
   cwd?: string
   toolCallTimeoutMs?: number
-  allowAppToolCalls?: boolean
+  allowAppToolCalls?: AppToolCallsSetting | boolean
 }
 
 export interface RemoteServerConfig {
@@ -23,14 +25,14 @@ export interface RemoteServerConfig {
   headers?: Record<string, string>
   toolCallTimeoutMs?: number
   reconnectOptions?: ReconnectOptions
-  allowAppToolCalls?: boolean
+  allowAppToolCalls?: AppToolCallsSetting | boolean
 }
 
 export interface IpcServerConfig {
   transport: 'ipc'
   socketPath: string
   toolCallTimeoutMs?: number
-  allowAppToolCalls?: boolean
+  allowAppToolCalls?: AppToolCallsSetting | boolean
 }
 
 export type ServerConfig = StdioServerConfig | RemoteServerConfig | IpcServerConfig
@@ -39,6 +41,13 @@ export interface Config {
   servers: Record<string, ServerConfig>
   defaultTimeoutMs?: number
 }
+
+const AppToolCallsSchema = Schema.union([
+  Schema.const('deny' as const),
+  Schema.const('approve' as const),
+  Schema.const('allow' as const),
+  Schema.boolean(),
+]).default(false)
 
 const ReconnectSchema: Schema<ReconnectOptions> = Schema.object({
   maxRetries: Schema.number().default(5),
@@ -54,7 +63,7 @@ const StdioSchema: Schema<StdioServerConfig> = Schema.object({
   env: Schema.dict(String).default({}),
   cwd: Schema.string(),
   toolCallTimeoutMs: Schema.number().default(30000),
-  allowAppToolCalls: Schema.boolean().default(false),
+  allowAppToolCalls: AppToolCallsSchema,
 })
 
 const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
@@ -67,14 +76,14 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   headers: Schema.dict(String).default({}),
   toolCallTimeoutMs: Schema.number().default(30000),
   reconnectOptions: ReconnectSchema.default({}),
-  allowAppToolCalls: Schema.boolean().default(false),
+  allowAppToolCalls: AppToolCallsSchema,
 })
 
 const IpcSchema: Schema<IpcServerConfig> = Schema.object({
   transport: Schema.const('ipc').required(),
   socketPath: Schema.string().required(),
   toolCallTimeoutMs: Schema.number().default(30000),
-  allowAppToolCalls: Schema.boolean().default(false),
+  allowAppToolCalls: AppToolCallsSchema,
 })
 
 export const Config: Schema<Config> = Schema.object({

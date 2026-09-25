@@ -17,6 +17,12 @@ declare module '@deepseek-ai/cordis' {
         handle: (ctx: Context, path: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>, options?: unknown) => () => void
       }
     }
+    agents?: {
+      get: (id: string) => any
+    }
+    approval?: {
+      request: (req: { agent: any; toolName: string; callId?: string; reason?: string; signal?: AbortSignal }) => Promise<string>
+    }
   }
 }
 
@@ -83,6 +89,32 @@ export function apply(ctx: Context, config: Config) {
               const toolName = typeof params.name === 'string' ? params.name : ''
               if (!session.allowedReverseTools.has(toolName)) {
                 return { ok: false, error: { code: 'forbidden', message: `Tool "${toolName}" is not permitted for this session` } }
+              }
+
+              const serverConfig = config.servers[session.serverName]
+              if (serverConfig?.allowAppToolCalls === 'approve') {
+                const approvalService = ctx.approval ?? (typeof (ctx as any).get === 'function' ? (ctx as any).get('approval') : undefined)
+                const agentsService = ctx.agents ?? (typeof (ctx as any).get === 'function' ? (ctx as any).get('agents') : undefined)
+                const agent = session.agentId && agentsService ? agentsService.get(session.agentId) : undefined
+
+                if (!approvalService || !agent) {
+                  return { ok: false, error: { code: 'unavailable', message: 'Approval service or agent not available for tool call approval' } }
+                }
+
+                try {
+                  const outcome = await approvalService.request({
+                    agent,
+                    toolName,
+                    callId: session.callId,
+                    reason: `MCP App requested execution of tool "${toolName}"`,
+                    signal,
+                  })
+                  if (outcome !== 'allowed-once') {
+                    return { ok: false, error: { code: 'forbidden', message: `Tool call "${toolName}" was rejected by approval policy (${outcome})` } }
+                  }
+                } catch (err) {
+                  return { ok: false, error: { code: 'forbidden', message: `Approval request failed: ${err instanceof Error ? err.message : String(err)}` } }
+                }
               }
 
               const args = typeof params.arguments === 'object' && params.arguments !== null

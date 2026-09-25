@@ -74,6 +74,30 @@ describe('Config Schema Validation', () => {
     expect(parsed.servers.untrusted.allowAppToolCalls).toBe(false)
   })
 
+  it('supports three-way allowAppToolCalls settings: deny, approve, allow', () => {
+    const raw = {
+      servers: {
+        deniedServer: {
+          command: 'python3',
+          allowAppToolCalls: 'deny',
+        },
+        approvedServer: {
+          command: 'python3',
+          allowAppToolCalls: 'approve',
+        },
+        allowedServer: {
+          command: 'python3',
+          allowAppToolCalls: 'allow',
+        },
+      },
+    }
+
+    const parsed: any = Config(raw as any)
+    expect(parsed.servers.deniedServer.allowAppToolCalls).toBe('deny')
+    expect(parsed.servers.approvedServer.allowAppToolCalls).toBe('approve')
+    expect(parsed.servers.allowedServer.allowAppToolCalls).toBe('allow')
+  })
+
   it('defaults stdio transport when omitted', () => {
     const raw = {
       servers: {
