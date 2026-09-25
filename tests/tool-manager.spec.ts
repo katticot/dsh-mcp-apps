@@ -408,6 +408,7 @@ describe('ServerToolManager', () => {
         .mockImplementationOnce(async () => ({ tools: [{ name: 'v2_tool', inputSchema: {} }] })),
       setNotificationHandler: vi.fn(),
     } as any
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport: vi.fn() })
 
     const p1 = (pool as any).refreshTools('srv', mockClient)
     const p2 = (pool as any).refreshTools('srv', mockClient)

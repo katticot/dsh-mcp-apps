@@ -116,4 +116,51 @@ describe('ServerPool Lifecycle', () => {
     const res = await pool.readResourceRaw('srv', 'resource://1')
     expect(res).toBe(rawResult)
   })
+
+  it('discards a zombie refreshTools resolution after stopAll', async () => {
+    const syncSpy = vi.fn()
+    const mockToolManager = { syncServerTools: syncSpy, evictServer: vi.fn(), getUiToolsSnapshot: () => [] } as any
+    const pool = new ServerPool({} as any, { servers: {} }, mockToolManager)
+
+    let resolveListTools!: (value: any) => void
+    const hungListTools = new Promise(resolve => { resolveListTools = resolve })
+    const mockClient = {
+      listTools: vi.fn().mockReturnValue(hungListTools),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as any
+    const disposeTransport = vi.fn().mockResolvedValue(undefined)
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport })
+
+    const refreshPromise = (pool as any).refreshTools('srv', mockClient)
+
+    await pool.stopAll()
+    resolveListTools({ tools: [{ name: 'late_tool', inputSchema: {} }] })
+    await refreshPromise
+
+    expect(syncSpy).not.toHaveBeenCalled()
+    expect(pool.getUiToolsSnapshot()).toEqual([])
+  })
+
+  it('discards a zombie refreshTools resolution after the server is evicted/closed and reconnects', async () => {
+    const syncSpy = vi.fn()
+    const mockToolManager = { syncServerTools: syncSpy, evictServer: vi.fn(), getUiToolsSnapshot: () => [] } as any
+    const pool = new ServerPool({} as any, { servers: { srv: { transport: 'stdio', command: 'cmd' } } }, mockToolManager)
+
+    let resolveListTools!: (value: any) => void
+    const hungListTools = new Promise(resolve => { resolveListTools = resolve })
+    const staleClient = { listTools: vi.fn().mockReturnValue(hungListTools) } as any
+    ;(pool as any).servers.set('srv', { client: staleClient, disposeTransport: vi.fn() })
+
+    const refreshPromise = (pool as any).refreshTools('srv', staleClient)
+
+    // Server closes and a new instance takes its place (e.g. after reconnect)
+    ;(pool as any).handleServerClose('srv')
+    const freshClient = { listTools: vi.fn() } as any
+    ;(pool as any).servers.set('srv', { client: freshClient, disposeTransport: vi.fn() })
+
+    resolveListTools({ tools: [{ name: 'late_tool', inputSchema: {} }] })
+    await refreshPromise
+
+    expect(syncSpy).not.toHaveBeenCalled()
+  })
 })
