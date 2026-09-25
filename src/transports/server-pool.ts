@@ -26,6 +26,8 @@ export class ServerPool {
   private config: Config
   private toolManager: ServerToolManager
   private servers = new Map<string, ServerInstance>()
+  private refreshSeq = new Map<string, number>()
+  private lastAppliedSeq = new Map<string, number>()
 
   constructor(ctx: Context, config: Config, toolManager: ServerToolManager) {
     this.ctx = ctx
@@ -97,10 +99,7 @@ export class ServerPool {
     }
     this.servers.set(serverName, instance)
 
-    // Initial tool sync
-    await this.refreshTools(serverName, client)
-
-    // Dynamic tool change subscription
+    // Dynamic tool change subscription (attached BEFORE initial sync)
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       try {
         await this.refreshTools(serverName, client)
@@ -108,23 +107,29 @@ export class ServerPool {
         console.error(`mcp-apps: failed to re-sync tools for server "${serverName}":`, err)
       }
     })
+
+    // Initial tool sync
+    await this.refreshTools(serverName, client)
   }
 
   private async refreshTools(serverName: string, client: Client): Promise<void> {
+    const seq = (this.refreshSeq.get(serverName) ?? 0) + 1
+    this.refreshSeq.set(serverName, seq)
+
     const toolsResult = await client.listTools()
+    const lastSeq = this.lastAppliedSeq.get(serverName) ?? 0
+    if (seq < lastSeq) {
+      // Outdated response; discard
+      return
+    }
+    this.lastAppliedSeq.set(serverName, seq)
+
     const serverConfig = this.config.servers[serverName]
     this.toolManager.syncServerTools(serverName, client, toolsResult.tools, serverConfig)
   }
 
   getUiToolsSnapshot(): UiToolDescriptor[] {
     return this.toolManager.getUiToolsSnapshot()
-  }
-
-  findServerForTool(toolName: string): string | undefined {
-    const snapshot = this.getUiToolsSnapshot()
-    const foundUi = snapshot.find(t => t.rawName === toolName || t.publicName === toolName)
-    if (foundUi?.serverName) return foundUi.serverName
-    return undefined
   }
 
   async listResources(serverName?: string): Promise<unknown> {
@@ -196,16 +201,20 @@ export class ServerPool {
     serverName: string,
     name: string,
     args?: Record<string, unknown>,
-    _signal?: AbortSignal
+    signal?: AbortSignal
   ): Promise<unknown> {
     const instance = this.servers.get(serverName)
     if (!instance) {
       throw new Error(`MCP server "${serverName}" is not connected`)
     }
-    return instance.client.callTool({
-      name,
-      arguments: args ?? {},
-    })
+    return instance.client.callTool(
+      {
+        name,
+        arguments: args ?? {},
+      },
+      undefined,
+      { signal }
+    )
   }
 
   async stopAll(): Promise<void> {

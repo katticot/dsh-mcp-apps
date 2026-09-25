@@ -176,7 +176,7 @@ export class ServerToolManager {
               const result = await client.callTool({
                 name: tool.name,
                 arguments: argumentsValue as Record<string, unknown>,
-              }, { signal: exec?.signal })
+              }, undefined, { signal: exec?.signal })
               if (result.isError) {
                 throw new Error(extractText(result.content, tool.name) || `Tool "${tool.name}" failed`)
               }
@@ -238,16 +238,20 @@ export class ServerToolManager {
   evictServer(serverName: string): void {
     const serverDisposers = this.disposers.get(serverName)
     if (serverDisposers) {
-      for (const [publicName, dispose] of serverDisposers.entries()) {
+      for (const [, dispose] of serverDisposers.entries()) {
         try {
           dispose()
         } catch {
           // Ignored
         }
-        this.uiTools.delete(publicName)
       }
       this.disposers.delete(serverName)
       this.fingerprints.delete(serverName)
+    }
+    for (const [pubName, descriptor] of this.uiTools.entries()) {
+      if (descriptor.serverName === serverName) {
+        this.uiTools.delete(pubName)
+      }
     }
   }
 

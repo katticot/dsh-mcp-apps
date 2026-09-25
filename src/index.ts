@@ -1,4 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
+import type { ApprovalService, ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { Config } from './config'
 import { AppSessionStore } from './session-store'
 import { ServerToolManager, type ToolsService } from './tool-manager'
@@ -16,12 +18,6 @@ declare module '@deepseek-ai/cordis' {
       rpc: {
         handle: (ctx: Context, path: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>, options?: unknown) => () => void
       }
-    }
-    agents?: {
-      get: (id: string) => any
-    }
-    approval?: {
-      request: (req: { agent: any; toolName: string; callId?: string; reason?: string; signal?: AbortSignal }) => Promise<string>
     }
   }
 }
@@ -95,25 +91,35 @@ export function apply(ctx: Context, config: Config) {
               if (serverConfig?.allowAppToolCalls === 'approve') {
                 const approvalService = ctx.approval ?? (typeof (ctx as any).get === 'function' ? (ctx as any).get('approval') : undefined)
                 const agentsService = ctx.agents ?? (typeof (ctx as any).get === 'function' ? (ctx as any).get('agents') : undefined)
-                const agent = session.agentId && agentsService ? agentsService.get(session.agentId) : undefined
+                const agent = session.agentId && agentsService ? agentsService.get(session.agentId as any) : undefined
 
                 if (!approvalService || !agent) {
                   return { ok: false, error: { code: 'unavailable', message: 'Approval service or agent not available for tool call approval' } }
                 }
 
+                if (agent.status !== 'running') {
+                  return { ok: false, error: { code: 'unavailable', message: `Cannot request approval while agent "${agent.id}" is idle` } }
+                }
+
                 try {
-                  const outcome = await approvalService.request({
+                  const outcome: ApprovalOutcome = await approvalService.request({
                     agent,
                     toolName,
-                    callId: session.callId,
+                    callId: session.callId as any,
                     reason: `MCP App requested execution of tool "${toolName}"`,
                     signal,
                   })
-                  if (outcome !== 'allowed-once') {
+                  if (outcome === 'allowed-once') {
+                    // Approved, proceed
+                  } else if (outcome === 'unavailable') {
+                    return { ok: false, error: { code: 'unavailable', message: `Approval service is unavailable for tool "${toolName}"` } }
+                  } else if (outcome === 'cancelled') {
+                    return { ok: false, error: { code: 'cancelled', message: `Approval request for tool "${toolName}" was cancelled` } }
+                  } else {
                     return { ok: false, error: { code: 'forbidden', message: `Tool call "${toolName}" was rejected by approval policy (${outcome})` } }
                   }
                 } catch (err) {
-                  return { ok: false, error: { code: 'forbidden', message: `Approval request failed: ${err instanceof Error ? err.message : String(err)}` } }
+                  return { ok: false, error: { code: 'unavailable', message: `Approval request failed: ${err instanceof Error ? err.message : String(err)}` } }
                 }
               }
 
