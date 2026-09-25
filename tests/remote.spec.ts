@@ -43,6 +43,28 @@ describe('Remote Transport Security', () => {
     }
   })
 
+  it('expands a normally-blocked ${VAR} in headers when listed in allowedVars', () => {
+    process.env.API_TOKEN = 'tok-abc123'
+    try {
+      const blockedTransport = createRemoteTransport({
+        transport: 'streamable-http',
+        url: 'https://mcp.example.com/stream',
+        headers: { Authorization: 'Bearer ${API_TOKEN}' },
+      }) as any
+      expect(blockedTransport._requestInit.headers.Authorization).toBe('Bearer ')
+
+      const allowedTransport = createRemoteTransport({
+        transport: 'streamable-http',
+        url: 'https://mcp.example.com/stream',
+        headers: { Authorization: 'Bearer ${API_TOKEN}' },
+        allowedVars: ['API_TOKEN'],
+      }) as any
+      expect(allowedTransport._requestInit.headers.Authorization).toBe('Bearer tok-abc123')
+    } finally {
+      delete process.env.API_TOKEN
+    }
+  })
+
   it('throws when headers are provided for websocket transport', () => {
     expect(() => createRemoteTransport({
       transport: 'websocket',

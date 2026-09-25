@@ -19,7 +19,7 @@ export function createRemoteTransport(config: RemoteServerConfig): Transport {
     throw new Error('WebSocketClientTransport: headers are not supported on websocket transport')
   }
 
-  const expandedHeaders = expandEnvVars(config.headers)
+  const expandedHeaders = expandEnvVars(config.headers, process.env, new Set(config.allowedVars))
 
   switch (config.transport) {
     case 'streamable-http':

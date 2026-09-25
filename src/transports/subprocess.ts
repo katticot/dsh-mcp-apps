@@ -8,7 +8,7 @@ export interface ManagedStdio {
 }
 
 export function createStdioTransport(config: StdioServerConfig): ManagedStdio {
-  const expandedEnv = expandEnvVars(config.env)
+  const expandedEnv = expandEnvVars(config.env, process.env, new Set(config.allowedVars))
 
   // scrubbedParentEnv() strips DSH_* and KEY/PASSWORD/SECRET/TOKEN-shaped
   // names, but not agent-socket variables like SSH_AUTH_SOCK or

@@ -19,6 +19,8 @@ export interface StdioServerConfig {
   reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
   allowedPermissions?: string[]
+  /** Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read. */
+  allowedVars?: string[]
 }
 
 export interface RemoteServerConfig {
@@ -29,6 +31,8 @@ export interface RemoteServerConfig {
   reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
   allowedPermissions?: string[]
+  /** Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read. */
+  allowedVars?: string[]
 }
 
 export interface IpcServerConfig {
@@ -71,6 +75,7 @@ const StdioSchema: Schema<StdioServerConfig> = Schema.object({
   reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
   allowedPermissions: Schema.array(String).default([]),
+  allowedVars: Schema.array(String).default([]),
 })
 
 const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
@@ -85,6 +90,7 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
   allowedPermissions: Schema.array(String).default([]),
+  allowedVars: Schema.array(String).default([]),
 })
 
 const IpcSchema: Schema<IpcServerConfig> = Schema.object({
