@@ -180,6 +180,29 @@ export class ServerPool {
     return { resources: allResources }
   }
 
+  async readResourceRaw(serverName?: string, uri?: string, signal?: AbortSignal): Promise<unknown> {
+    if (!uri) throw new Error('Missing resource URI')
+
+    let targetServer = serverName
+    if (!targetServer) {
+      const uiTool = this.getUiToolsSnapshot().find(t => t.resourceUri === uri)
+      targetServer = uiTool?.serverName
+    }
+
+    if (!targetServer) {
+      throw new Error(`Cannot locate MCP server for resource URI: ${uri}`)
+    }
+
+    const instance = this.servers.get(targetServer)
+    if (!instance) {
+      throw new Error(`MCP server "${targetServer}" is not connected`)
+    }
+
+    const serverConfig = this.config.servers[targetServer]
+    const timeout = serverConfig?.toolCallTimeoutMs ?? this.config.defaultTimeoutMs ?? 30000
+    return instance.client.readResource({ uri }, { timeout, signal })
+  }
+
   async readResource(serverName?: string, uri?: string, signal?: AbortSignal): Promise<ResourceResponse> {
     if (!uri) throw new Error('Missing resource URI')
 
@@ -202,11 +225,18 @@ export class ServerPool {
     const serverConfig = this.config.servers[targetServer]
     const timeout = serverConfig?.toolCallTimeoutMs ?? this.config.defaultTimeoutMs ?? 30000
     const response = await instance.client.readResource({ uri }, { timeout, signal })
-    if (!response.contents || response.contents.length !== 1) {
+    if (!response.contents || response.contents.length === 0) {
       throw new Error(`Resource ${uri} returned invalid content items`)
     }
 
-    const item = response.contents[0]
+    // Find HTML text or blob item, or fallback to first item
+    const item = response.contents.find(c => {
+      const mime = 'mimeType' in c ? (c as { mimeType?: string }).mimeType : undefined
+      if (mime?.includes('html')) return true
+      return ('text' in c && typeof c.text === 'string' && (c.text.includes('<html') || c.text.includes('<!DOCTYPE'))) ||
+             ('blob' in c && typeof c.blob === 'string')
+    }) ?? response.contents[0]
+
     let html: string | undefined
     if ('text' in item && typeof item.text === 'string') {
       html = item.text

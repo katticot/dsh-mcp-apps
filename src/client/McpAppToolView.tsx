@@ -208,7 +208,7 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
       }
 
       bridge.onreadresource = async (params, extra) => {
-        const res = await connection.rpc.call('/mcp-apps', 'resources/read', {
+        const res = await connection.rpc.call('/mcp-apps', 'resources/read-raw', {
           server: call.serverName,
           uri: params.uri,
         }, extra?.signal)

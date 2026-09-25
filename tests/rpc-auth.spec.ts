@@ -509,4 +509,18 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       },
     })
   })
+
+  it('supports resources/read-raw returning raw ReadResourceResult unchanged', async () => {
+    const rawResult = {
+      contents: [
+        { uri: 'resource://data', text: 'raw data' },
+        { uri: 'resource://data2', blob: 'YmxvYg==' },
+      ],
+    }
+    vi.spyOn(ServerPool.prototype, 'readResourceRaw').mockResolvedValue(rawResult as any)
+
+    const response = await rpcHandler('resources/read-raw', { server: 'analytics', uri: 'resource://data' })
+    expect(response.ok).toBe(true)
+    expect(response.value).toEqual(rawResult)
+  })
 })
