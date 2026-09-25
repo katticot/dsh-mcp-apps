@@ -82,7 +82,7 @@ export class ServerPool {
 
     const client = new Client({
       name: 'dsh-mcp-apps',
-      version: '0.1.0',
+      version: __PKG_VERSION__,
     }, {
       capabilities: {
         extensions: {
