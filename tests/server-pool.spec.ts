@@ -100,6 +100,57 @@ describe('ServerPool Lifecycle', () => {
     expect(res.html).toBe('<div>App Content</div>')
   })
 
+  it('clears a pending reconnect timer before scheduling a new one, avoiding double reconnects', async () => {
+    vi.useFakeTimers()
+    const startSpy = vi.spyOn(ServerPool.prototype, 'startServer').mockResolvedValue()
+    const pool = new ServerPool({} as any, {
+      servers: {
+        srv: {
+          transport: 'stdio',
+          command: 'cmd',
+          reconnectOptions: { maxRetries: 5, initialDelayMs: 1000, backoffFactor: 2 },
+        } as any,
+      },
+    }, { evictServer: vi.fn(), getUiToolsSnapshot: () => [] } as any)
+
+    // Two onclose events fire back-to-back before the first reconnect delay elapses
+    ;(pool as any).handleServerClose('srv')
+    ;(pool as any).handleServerClose('srv')
+
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
+  it('does not start a duplicate reconnect while one is already in flight', async () => {
+    vi.useFakeTimers()
+    let resolveStart!: () => void
+    const startSpy = vi.spyOn(ServerPool.prototype, 'startServer').mockImplementation(
+      () => new Promise<void>(resolve => { resolveStart = resolve })
+    )
+    const pool = new ServerPool({} as any, {
+      servers: {
+        srv: {
+          transport: 'stdio',
+          command: 'cmd',
+          reconnectOptions: { maxRetries: 5, initialDelayMs: 1000, backoffFactor: 2 },
+        } as any,
+      },
+    }, { evictServer: vi.fn(), getUiToolsSnapshot: () => [] } as any)
+
+    ;(pool as any).handleServerClose('srv')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(startSpy).toHaveBeenCalledTimes(1)
+
+    // Another close arrives while the in-flight startServer() has not resolved yet
+    ;(pool as any).handleServerClose('srv')
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(startSpy).toHaveBeenCalledTimes(1)
+
+    resolveStart()
+    vi.useRealTimers()
+  })
+
   it('readResourceRaw returns raw ReadResourceResult unchanged', async () => {
     const rawResult = {
       contents: [
