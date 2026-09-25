@@ -86,8 +86,14 @@ const IpcSchema: Schema<IpcServerConfig> = Schema.object({
   allowAppToolCalls: AppToolCallsSchema,
 })
 
+export const SERVER_NAME_REGEX = /^(?!.*__)(?!.*_$)[a-zA-Z0-9_-]+$/
+
+const ServerNameSchema = Schema.string()
+  .pattern(SERVER_NAME_REGEX)
+  .description('Server name cannot contain consecutive underscores or end with an underscore')
+
 export const Config: Schema<Config> = Schema.object({
-  servers: Schema.dict(Schema.union([StdioSchema, RemoteSchema, IpcSchema])).default({}),
+  servers: Schema.dict(Schema.union([StdioSchema, RemoteSchema, IpcSchema]), ServerNameSchema).default({}),
   defaultTimeoutMs: Schema.number().default(30000),
 })
 

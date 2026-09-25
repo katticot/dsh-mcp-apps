@@ -136,6 +136,29 @@ describe('Config Schema Validation', () => {
 
     expect(() => Config(raw as any)).toThrow()
   })
+
+  it('rejects server names that contain __ or end with _', () => {
+    expect(() => Config({
+      servers: {
+        'invalid__name': { transport: 'stdio', command: 'node' },
+      },
+    } as any)).toThrow()
+
+    expect(() => Config({
+      servers: {
+        'trailing_': { transport: 'stdio', command: 'node' },
+      },
+    } as any)).toThrow()
+
+    const valid = Config({
+      servers: {
+        'valid-name': { transport: 'stdio', command: 'node' },
+        'valid_name_2': { transport: 'stdio', command: 'node' },
+      },
+    } as any)
+    expect(valid.servers['valid-name']).toBeDefined()
+    expect(valid.servers['valid_name_2']).toBeDefined()
+  })
 })
 
 describe('Environment Variable Expansion', () => {
