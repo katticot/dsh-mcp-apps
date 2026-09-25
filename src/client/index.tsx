@@ -17,7 +17,7 @@ interface ClientContext {
 
 export function apply(ctx: ClientContext) {
   const connection = ctx.connection
-  const registered = new Set<string>()
+  const viewDisposers = new Map<string, () => void>()
 
   const syncTools = async () => {
     try {
@@ -29,13 +29,31 @@ export function apply(ctx: ClientContext) {
 
       if (!Array.isArray(result.value)) return
 
+      const currentTools = new Map<string, UiToolInfo>()
       for (const candidate of result.value) {
         const tool = parseUiTool(candidate)
-        if (!tool || registered.has(tool.publicName)) continue
-        registered.add(tool.publicName)
+        if (tool) currentTools.set(tool.publicName, tool)
+      }
 
+      // Unregister views for tools that are no longer present
+      for (const [name, disposer] of viewDisposers.entries()) {
+        if (!currentTools.has(name)) {
+          try {
+            disposer()
+          } catch {
+            // Ignored
+          }
+          viewDisposers.delete(name)
+        }
+      }
+
+      // Register views for newly discovered tools
+      for (const [name, tool] of currentTools.entries()) {
+        if (viewDisposers.has(name)) continue
+
+        let unregisterSlot: (() => void) | undefined
         ctx.effect(() => {
-          return ctx.slots.inject('tool.call.toolview', () => {
+          unregisterSlot = ctx.slots.inject('tool.call.toolview', () => {
             return ctx.slots.register({
               name: 'tool.call.toolview',
               key: tool.publicName,
@@ -47,26 +65,54 @@ export function apply(ctx: ClientContext) {
               />
             ))
           })
+          return unregisterSlot
         }, `mcp-apps: ${tool.publicName} view`)
+
+        if (unregisterSlot) {
+          viewDisposers.set(name, unregisterSlot)
+        } else {
+          viewDisposers.set(name, () => {})
+        }
       }
     } catch (err) {
       console.error('mcp-apps: client initialization error:', err)
     }
   }
 
-  // Initial sync (waits for host initial tool discovery)
   void syncTools()
 
-  // Re-sync if connection resets
+  // Host-pushed ui-tools/changed event and connection reset listeners
+  let unlistenReset: (() => void) | undefined
+  let unlistenChanged: (() => void) | undefined
+
   if (typeof ctx.on === 'function') {
-    ctx.on('connection/reset', () => {
+    unlistenReset = ctx.on('connection/reset', () => {
+      void syncTools()
+    })
+    unlistenChanged = ctx.on('ui-tools/changed', () => {
       void syncTools()
     })
   }
 
   // Safety retries for delayed server connections
-  setTimeout(() => { void syncTools() }, 3000)
-  setTimeout(() => { void syncTools() }, 8000)
+  const t1 = setTimeout(() => { void syncTools() }, 3000)
+  const t2 = setTimeout(() => { void syncTools() }, 8000)
+
+  // Disposer on client plugin unload
+  return () => {
+    clearTimeout(t1)
+    clearTimeout(t2)
+    unlistenReset?.()
+    unlistenChanged?.()
+    for (const disposer of viewDisposers.values()) {
+      try {
+        disposer()
+      } catch {
+        // Ignored
+      }
+    }
+    viewDisposers.clear()
+  }
 }
 
 function parseUiTool(value: unknown): UiToolInfo | null {

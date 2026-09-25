@@ -18,6 +18,7 @@ export interface StdioServerConfig {
   toolCallTimeoutMs?: number
   reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
+  allowedPermissions?: string[]
 }
 
 export interface RemoteServerConfig {
@@ -27,6 +28,7 @@ export interface RemoteServerConfig {
   toolCallTimeoutMs?: number
   reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
+  allowedPermissions?: string[]
 }
 
 export interface IpcServerConfig {
@@ -35,6 +37,7 @@ export interface IpcServerConfig {
   toolCallTimeoutMs?: number
   reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
+  allowedPermissions?: string[]
 }
 
 export type ServerConfig = StdioServerConfig | RemoteServerConfig | IpcServerConfig
@@ -65,7 +68,9 @@ const StdioSchema: Schema<StdioServerConfig> = Schema.object({
   env: Schema.dict(String).default({}),
   cwd: Schema.string(),
   toolCallTimeoutMs: Schema.number().default(30000),
+  reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
+  allowedPermissions: Schema.array(String).default([]),
 })
 
 const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
@@ -79,13 +84,16 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   toolCallTimeoutMs: Schema.number().default(30000),
   reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
+  allowedPermissions: Schema.array(String).default([]),
 })
 
 const IpcSchema: Schema<IpcServerConfig> = Schema.object({
   transport: Schema.const('ipc').required(),
   socketPath: Schema.string().required(),
   toolCallTimeoutMs: Schema.number().default(30000),
+  reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
+  allowedPermissions: Schema.array(String).default([]),
 })
 
 export const SERVER_NAME_REGEX = /^(?!.*__)(?!.*_$)[a-zA-Z0-9_-]+$/

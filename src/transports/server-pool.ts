@@ -134,7 +134,6 @@ export class ServerPool {
       }
     })
 
-    // Initial tool sync
     await this.refreshTools(serverName, client)
   }
 
@@ -255,11 +254,24 @@ export class ServerPool {
     const meta = (item as { _meta?: unknown; meta?: unknown })._meta ?? (item as { meta?: unknown }).meta
     const ui = typeof meta === 'object' && meta !== null ? (meta as { ui?: { csp?: Record<string, string[]>; permissions?: Record<string, string[]> } }).ui : undefined
 
+    let permissions = ui?.permissions
+    if (permissions) {
+      const allowed = new Set(serverConfig?.allowedPermissions ?? [])
+      permissions = Object.fromEntries(
+        Object.entries(permissions).filter(([key]) => {
+          if (['camera', 'microphone', 'geolocation'].includes(key)) {
+            return allowed.has(key)
+          }
+          return true
+        })
+      )
+    }
+
     return {
       uri,
       html,
       csp: ui?.csp,
-      permissions: ui?.permissions,
+      permissions,
     }
   }
 

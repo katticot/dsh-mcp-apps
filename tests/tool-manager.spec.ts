@@ -115,7 +115,6 @@ describe('ServerToolManager', () => {
       },
     ]
 
-    // Sync with allowAppToolCalls = true
     manager.syncServerTools('analytics', mockClient, tools, {
       transport: 'stdio',
       command: 'analytics-srv',
@@ -132,9 +131,8 @@ describe('ServerToolManager', () => {
     expect(session).toBeDefined()
     expect(session?.allowedReverseTools.has('render_chart')).toBe(true)
     expect(session?.allowedReverseTools.has('query_db')).toBe(true)
-    expect(session?.allowedReverseTools.has('model_secret_eval')).toBe(false) // model-only tool filtered out!
+    expect(session?.allowedReverseTools.has('model_secret_eval')).toBe(false)
 
-    // Clear and test with allowAppToolCalls = false / omitted
     manager.evictServer('analytics')
     registered.length = 0
     manager.syncServerTools('analytics', mockClient, tools, {
@@ -149,7 +147,7 @@ describe('ServerToolManager', () => {
 
     const disabledSession = sessionStore.get(disabledExecResult._sessionToken)
     expect(disabledSession).toBeDefined()
-    expect(disabledSession?.allowedReverseTools.size).toBe(0) // completely empty
+    expect(disabledSession?.allowedReverseTools.size).toBe(0)
   })
 
   it('creates session in execute with agentId/callId and strips _sessionToken in presentationMeta', async () => {
@@ -361,14 +359,12 @@ describe('ServerToolManager', () => {
     manager.syncServerTools('test-srv', {} as any, initialTools)
     expect(registered).toHaveLength(2)
 
-    // Re-sync with changed description
     const updatedTools: Tool[] = [
       { name: 'stable_tool', description: 'v1', inputSchema: { type: 'object' } },
       { name: 'changing_tool', description: 'v2 modified', inputSchema: { type: 'object' } },
     ]
 
     manager.syncServerTools('test-srv', {} as any, updatedTools)
-    // changing_tool disposed and re-registered
     expect(disposed).toContain('mcp__test-srv__changing_tool')
     expect(disposed).not.toContain('mcp__test-srv__stable_tool')
   })
@@ -383,7 +379,6 @@ describe('ServerToolManager', () => {
     }
     const manager = new ServerToolManager(mockToolsService, new AppSessionStore())
 
-    // Tools that would produce duplicate public names
     const tools: Tool[] = [
       { name: 'duplicate_tool', inputSchema: { type: 'object' } },
       { name: 'duplicate_tool', inputSchema: { type: 'object' } },
@@ -404,7 +399,6 @@ describe('ServerToolManager', () => {
 
     const pool = new ServerPool({} as any, { servers: {} }, mockToolManager)
 
-    // Simulate two concurrent listTools calls where call 1 resolves AFTER call 2
     let resolveFirst!: (value: any) => void
     const firstCallPromise = new Promise(resolve => { resolveFirst = resolve })
 
@@ -415,20 +409,16 @@ describe('ServerToolManager', () => {
       setNotificationHandler: vi.fn(),
     } as any
 
-    // Trigger refresh 1
     const p1 = (pool as any).refreshTools('srv', mockClient)
-    // Trigger refresh 2
     const p2 = (pool as any).refreshTools('srv', mockClient)
 
     await p2
     expect(syncSpy).toHaveBeenCalledTimes(1)
     expect(syncSpy).toHaveBeenLastCalledWith('srv', mockClient, [{ name: 'v2_tool', inputSchema: {} }], undefined)
 
-    // Now resolve the first call late
     resolveFirst({ tools: [{ name: 'v1_tool', inputSchema: {} }] })
     await p1
 
-    // Should still have been called only once, ignoring stale v1_tool
     expect(syncSpy).toHaveBeenCalledTimes(1)
   })
 })
