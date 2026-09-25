@@ -163,13 +163,14 @@ describe('Config Schema Validation', () => {
 
 describe('Environment Variable Expansion', () => {
   const mockEnv = {
+    USER_NAME: 'Alice',
     AUTH_TOKEN: 'Bearer secret-xyz',
     PORT: '8080',
     EMPTY_VAR: '',
   }
 
   it('expands existing environment variables', () => {
-    expect(expandEnvString('${AUTH_TOKEN}', mockEnv)).toBe('Bearer secret-xyz')
+    expect(expandEnvString('Hello ${USER_NAME}', mockEnv)).toBe('Hello Alice')
     expect(expandEnvString('http://localhost:${PORT}', mockEnv)).toBe('http://localhost:8080')
   })
 
@@ -185,11 +186,28 @@ describe('Environment Variable Expansion', () => {
       'X-Custom-Env': '${UNSET:-production}',
       'X-Port': '${PORT}',
     }
-    const expanded = expandEnvVars(headers, mockEnv)
+    const expanded = expandEnvVars(headers, mockEnv, new Set(['AUTH_TOKEN']))
     expect(expanded).toEqual({
       Authorization: 'Bearer secret-xyz',
       'X-Custom-Env': 'production',
       'X-Port': '8080',
     })
+  })
+
+  it('blocks reading DSH_* and sensitive secrets during variable expansion unless explicitly allowed', () => {
+    const env = {
+      DSH_INTERNAL_TOKEN: 'super-secret',
+      API_SECRET_KEY: 'secret-123',
+      SAFE_PORT: '9000',
+    }
+
+    // Default: blocked
+    expect(expandEnvString('${DSH_INTERNAL_TOKEN}', env)).toBe('')
+    expect(expandEnvString('${API_SECRET_KEY}', env)).toBe('')
+    expect(expandEnvString('${SAFE_PORT}', env)).toBe('9000')
+
+    // Explicitly allowed
+    expect(expandEnvString('${DSH_INTERNAL_TOKEN}', env, new Set(['DSH_INTERNAL_TOKEN']))).toBe('super-secret')
+    expect(expandEnvString('${API_SECRET_KEY}', env, new Set(['API_SECRET_KEY']))).toBe('secret-123')
   })
 })
