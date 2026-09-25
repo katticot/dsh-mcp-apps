@@ -124,10 +124,6 @@ export class ServerPool {
     const snapshot = this.getUiToolsSnapshot()
     const foundUi = snapshot.find(t => t.rawName === toolName || t.publicName === toolName)
     if (foundUi?.serverName) return foundUi.serverName
-
-    for (const [name] of this.servers.entries()) {
-      return name
-    }
     return undefined
   }
 
