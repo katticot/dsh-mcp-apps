@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ServerToolManager, publicToolName } from '../src/tool-manager'
+import { ServerPool } from '../src/transports/server-pool'
 import { AppSessionStore } from '../src/session-store'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 
@@ -255,5 +256,25 @@ describe('ServerToolManager', () => {
     expect(registeredNames).toContain('mcp__test-srv__model_and_app_tool')
     expect(registeredNames).toContain('mcp__test-srv__regular_tool')
     expect(registeredNames).not.toContain('mcp__test-srv__app_secret_button')
+  })
+
+  it('returns matching server for raw or public name and undefined for unknown tool in findServerForTool', () => {
+    const mockToolsService = { register: vi.fn(() => vi.fn()) }
+    const sessionStore = new AppSessionStore()
+    const manager = new ServerToolManager(mockToolsService, sessionStore)
+    const pool = new ServerPool({} as any, { servers: {} }, manager)
+    ;(pool as any).servers.set('other-srv', {})
+
+    manager.syncServerTools('weather-srv', {} as any, [
+      {
+        name: 'get_forecast',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { resourceUri: 'ui://weather/forecast' } },
+      },
+    ])
+
+    expect(pool.findServerForTool('get_forecast')).toBe('weather-srv')
+    expect(pool.findServerForTool('mcp__weather-srv__get_forecast')).toBe('weather-srv')
+    expect(pool.findServerForTool('unknown_tool')).toBeUndefined()
   })
 })
