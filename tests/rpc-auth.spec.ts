@@ -61,9 +61,10 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       return Promise.resolve()
     })
     vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)
-    callToolSpy = vi.spyOn(ServerPool.prototype, 'callTool').mockImplementation(async (server, name, args) => ({
+    callToolSpy = vi.spyOn(ServerPool.prototype, 'callTool').mockImplementation(async (server, name, args, signal) => ({
       content: [{ type: 'text', text: `Success: ${server}.${name}` }],
       args,
+      signal,
     }))
 
     const mockCtx = {
@@ -294,6 +295,201 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     })
     expect(rejectedRes.ok).toBe(false)
     expect(rejectedRes.error.code).toBe('forbidden')
+
+    // If approval returns 'unavailable', return error with code 'unavailable'
+    mockApproval.request.mockResolvedValueOnce('unavailable')
+    const unavailRes = await secureRpcHandler('tools/call', {
+      sessionToken,
+      name: 'write_db',
+    })
+    expect(unavailRes).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        message: 'Approval service is unavailable for tool "write_db"',
+      },
+    })
+
+    // If approval returns 'cancelled', return error with code 'cancelled'
+    mockApproval.request.mockResolvedValueOnce('cancelled')
+    const cancelledRes = await secureRpcHandler('tools/call', {
+      sessionToken,
+      name: 'write_db',
+    })
+    expect(cancelledRes).toEqual({
+      ok: false,
+      error: {
+        code: 'cancelled',
+        message: 'Approval request for tool "write_db" was cancelled',
+      },
+    })
+
+    // If approval request throws, fail closed with 'unavailable'
+    mockApproval.request.mockRejectedValueOnce(new Error('Prompt dismissed'))
+    const thrownRes = await secureRpcHandler('tools/call', {
+      sessionToken,
+      name: 'write_db',
+    })
+    expect(thrownRes).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        message: 'Approval request failed: Prompt dismissed',
+      },
+    })
+
+    // If agent is idle (status !== 'running'), fail closed before requesting approval
+    mockAgents.get.mockReturnValueOnce({ id: 'agent-sec', status: 'idle' })
+    const idleRes = await secureRpcHandler('tools/call', {
+      sessionToken,
+      name: 'write_db',
+    })
+    expect(idleRes).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        message: 'Cannot request approval while agent "agent-sec" is idle',
+      },
+    })
+    expect(mockApproval.request).not.toHaveBeenCalledTimes(6) // not called for the idle attempt
+  })
+
+  it('handles approve mode when approval or agents service is missing or agent is disposed', async () => {
+    const approveConfig = {
+      servers: {
+        secure_srv: {
+          transport: 'stdio' as const,
+          command: 'sec-srv',
+          allowAppToolCalls: 'approve' as const,
+        },
+      },
+    }
+
+    let handlerWithoutServices: any
+    // Case 1: no approval or agents service
+    const bareCtx = {
+      tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
+      connection: { register: vi.fn((_c, _p, h) => { handlerWithoutServices = h; return vi.fn() }) },
+      effect: vi.fn(fn => fn()),
+    }
+    apply(bareCtx as any, approveConfig as any)
+
+    toolManager.syncServerTools('secure_srv', mockClient as any, [
+      { name: 'chart', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://sec/chart' } } },
+      { name: 'action', inputSchema: { type: 'object' } },
+    ], approveConfig.servers.secure_srv)
+
+    const chartDef = registeredToolDefs.find(d => d.name === 'mcp__secure_srv__chart')
+    const exec = await chartDef.execute({}, { agent: { id: 'a1' }, callId: 'c1' })
+    const resNoService = await handlerWithoutServices('tools/call', {
+      sessionToken: exec._sessionToken,
+      name: 'action',
+    })
+    expect(resNoService).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        message: 'Approval service or agent not available for tool call approval',
+      },
+    })
+
+    // Case 2: agent disposed / get returns undefined
+    let handlerWithDisposedAgent: any
+    const ctxDisposed = {
+      tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
+      connection: { register: vi.fn((_c, _p, h) => { handlerWithDisposedAgent = h; return vi.fn() }) },
+      effect: vi.fn(fn => fn()),
+      approval: { request: vi.fn() },
+      agents: { get: vi.fn().mockReturnValue(undefined) },
+    }
+    apply(ctxDisposed as any, approveConfig as any)
+    toolManager.syncServerTools('secure_srv', mockClient as any, [
+      { name: 'chart', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://sec/chart' } } },
+      { name: 'action', inputSchema: { type: 'object' } },
+    ], approveConfig.servers.secure_srv)
+
+    const chartDef2 = registeredToolDefs[registeredToolDefs.length - 2]
+    const execDisposed = await chartDef2.execute({}, { agent: { id: 'a2' }, callId: 'c2' })
+    const resDisposed = await handlerWithDisposedAgent('tools/call', {
+      sessionToken: execDisposed._sessionToken,
+      name: 'action',
+    })
+    expect(resDisposed).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        message: 'Approval service or agent not available for tool call approval',
+      },
+    })
+
+    // Case 3: session without agentId (e.g. executed without agent context)
+    const execNoAgent = await chartDef2.execute({}, {})
+    const resNoAgent = await handlerWithDisposedAgent('tools/call', {
+      sessionToken: execNoAgent._sessionToken,
+      name: 'action',
+    })
+    expect(resNoAgent).toEqual({
+      ok: false,
+      error: {
+        code: 'unavailable',
+        message: 'Approval service or agent not available for tool call approval',
+      },
+    })
+  })
+
+  it('rejects app tool calls end-to-end when allowAppToolCalls is false', async () => {
+    const denyConfig = {
+      servers: {
+        denied_srv: {
+          transport: 'stdio' as const,
+          command: 'denied-srv',
+          allowAppToolCalls: false,
+        },
+      },
+    }
+    let deniedHandler: any
+    const mockCtx = {
+      tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
+      connection: { register: vi.fn((_c, _p, h) => { deniedHandler = h; return vi.fn() }) },
+      effect: vi.fn(fn => fn()),
+    }
+    apply(mockCtx as any, denyConfig as any)
+
+    toolManager.syncServerTools('denied_srv', mockClient as any, [
+      { name: 'chart', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://denied/chart' } } },
+      { name: 'action', inputSchema: { type: 'object' } },
+    ], denyConfig.servers.denied_srv)
+
+    const chartDef = registeredToolDefs.find(d => d.name === 'mcp__denied_srv__chart')
+    const exec = await chartDef.execute({}, { agent: { id: 'a1' }, callId: 'c1' })
+    const res = await deniedHandler('tools/call', {
+      sessionToken: exec._sessionToken,
+      name: 'action',
+    })
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'Tool "action" is not permitted for this session',
+      },
+    })
+  })
+
+  it('forwards AbortSignal to pool.callTool on reverse tool call', async () => {
+    const chartDef = registeredToolDefs.find(d => d.name === 'mcp__analytics__render_chart')
+    const execResult = await chartDef.execute({}, { agent: { id: 'agent-1' }, callId: 'c-1' })
+    const sessionToken = execResult._sessionToken
+
+    const ac = new AbortController()
+    const res = await rpcHandler('tools/call', {
+      sessionToken,
+      server: 'analytics',
+      name: 'export_csv',
+      arguments: { format: 'csv' },
+    }, ac.signal)
+
+    expect(res.ok).toBe(true)
+    expect(callToolSpy).toHaveBeenCalledWith('analytics', 'export_csv', { format: 'csv' }, ac.signal)
   })
 
   it('disposes sessionStore when host plugin unloads', async () => {

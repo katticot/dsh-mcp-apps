@@ -28,6 +28,8 @@ export class ServerPool {
   private servers = new Map<string, ServerInstance>()
   private refreshSeq = new Map<string, number>()
   private lastAppliedSeq = new Map<string, number>()
+  private lifecycleController = new AbortController()
+  private startupTasks = new Map<string, Promise<void>>()
 
   constructor(ctx: Context, config: Config, toolManager: ServerToolManager) {
     this.ctx = ctx
@@ -40,13 +42,23 @@ export class ServerPool {
   startAll(): Promise<void> {
     if (!this.initialSyncPromise) {
       this.initialSyncPromise = (async () => {
-        for (const [name, serverConfig] of Object.entries(this.config.servers)) {
-          try {
-            await this.startServer(name, serverConfig)
-          } catch (err) {
-            console.error(`mcp-apps: failed to connect to server "${name}":`, err)
-          }
-        }
+        const tasks = Object.entries(this.config.servers).map(async ([name, serverConfig]) => {
+          const task = (async () => {
+            try {
+              if (this.lifecycleController.signal.aborted) return
+              await this.startServer(name, serverConfig, this.lifecycleController.signal)
+            } catch (err) {
+              if (!this.lifecycleController.signal.aborted) {
+                console.error(`mcp-apps: failed to connect to server "${name}":`, err)
+              }
+            } finally {
+              this.startupTasks.delete(name)
+            }
+          })()
+          this.startupTasks.set(name, task)
+          return task
+        })
+        await Promise.allSettled(tasks)
       })()
     }
     return this.initialSyncPromise
@@ -61,7 +73,10 @@ export class ServerPool {
     }
   }
 
-  async startServer(serverName: string, serverConfig: ServerConfig): Promise<void> {
+  async startServer(serverName: string, serverConfig: ServerConfig, signal?: AbortSignal): Promise<void> {
+    const isAborted = () => signal?.aborted || this.lifecycleController.signal.aborted
+    if (isAborted()) return
+
     const client = new Client({
       name: 'dsh-mcp-apps',
       version: '0.1.0',
@@ -90,6 +105,12 @@ export class ServerPool {
       const remote = createRemoteTransport(serverConfig)
       disposeTransport = () => remote.close()
       await client.connect(remote)
+    }
+
+    if (isAborted()) {
+      await client.close().catch(() => void 0)
+      await disposeTransport().catch(() => void 0)
+      return
     }
 
     const instance: ServerInstance = {
