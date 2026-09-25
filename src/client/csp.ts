@@ -1,11 +1,47 @@
-const DOMAIN_REGEX = /^(https?:\/\/)?((([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z0-9]{2,})|localhost|(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}))(:\d{1,5})?$/
+function isPrivateOrLoopbackHost(host: string): boolean {
+  const cleanHost = host.toLowerCase().replace(/^\[|\]$/g, '')
+  if (cleanHost === 'localhost' || cleanHost === '::1' || cleanHost === '0.0.0.0') return true
+  if (cleanHost.startsWith('fe80:')) return true
+
+  const ipv4Match = cleanHost.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (ipv4Match) {
+    const [, o1, o2, o3, o4] = ipv4Match.map(Number)
+    if (o1 > 255 || o2 > 255 || o3 > 255 || o4 > 255) return true
+    if (o1 === 127) return true // Loopback 127.0.0.0/8
+    if (o1 === 10) return true // Private 10.0.0.0/8
+    if (o1 === 172 && o2 >= 16 && o2 <= 31) return true // Private 172.16.0.0/12
+    if (o1 === 192 && o2 === 168) return true // Private 192.168.0.0/16
+    if (o1 === 169 && o2 === 254) return true // Link-local 169.254.0.0/16
+    if (o1 === 0) return true
+  }
+  return false
+}
+
+const DOMAIN_PATTERN = /^([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}$/
+const PUBLIC_IPV4_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
 
 export function sanitizeDomains(rawDomains?: unknown): string[] {
   if (!Array.isArray(rawDomains)) return []
   return rawDomains
     .filter((d): d is string => typeof d === 'string')
     .map(d => d.trim())
-    .filter(d => d !== '*' && !d.includes(';') && !d.includes(' ') && DOMAIN_REGEX.test(d))
+    .filter(d => {
+      if (d === '*' || d.includes(';') || d.includes(' ') || d.includes('<!--') || d.includes('-->')) return false
+      if (/^http:\/\//i.test(d)) return false
+
+      let hostWithPort = d.replace(/^(https|wss|ws):\/\//i, '')
+      if (hostWithPort.includes('://')) return false
+
+      const parts = hostWithPort.split(':')
+      if (parts.length > 2) return false
+      if (parts.length === 2 && !/^\d{1,5}$/.test(parts[1])) return false
+
+      const host = parts[0]
+      if (isPrivateOrLoopbackHost(host)) return false
+
+      const hostToCheck = host.startsWith('*.') ? host.slice(2) : host
+      return DOMAIN_PATTERN.test(hostToCheck) || PUBLIC_IPV4_PATTERN.test(hostToCheck)
+    })
 }
 
 export function buildDynamicCsp(
@@ -35,7 +71,7 @@ export function buildDynamicCsp(
     "default-src 'none'",
     `script-src 'unsafe-inline' 'unsafe-eval' blob: data:${resourceStr}`.trim(),
     `style-src 'unsafe-inline' blob: data:${resourceStr}`.trim(),
-    `img-src data: blob: https:${resourceStr}`.trim(),
+    `img-src data: blob:${resourceStr}`.trim(),
     `font-src data: blob:${resourceStr}`.trim(),
     `media-src data: blob:${resourceStr}`.trim(),
     `connect-src${connectStr}`.trim(),
@@ -54,10 +90,24 @@ export function withContentSecurityPolicy(
   const policy = buildDynamicCsp(csp, permissions)
   const metaTag = `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(policy)}">`
 
-  if (/<head(?:\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<head(?:\s[^>]*)?>/i, match => `${match}${metaTag}`)
+  if (typeof DOMParser !== 'undefined') {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(html, 'text/html')
+    const meta = doc.createElement('meta')
+    meta.httpEquiv = 'Content-Security-Policy'
+    meta.content = policy
+    if (doc.head.firstChild) {
+      doc.head.insertBefore(meta, doc.head.firstChild)
+    } else {
+      doc.head.appendChild(meta)
+    }
+    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML
   }
-  return `${metaTag}${html}`
+
+  if (/<head(?:\s[^>]*)?>/i.test(html)) {
+    return html.replace(/(<head(?:\s[^>]*)?>)/i, `$1${metaTag}`)
+  }
+  return `<head>${metaTag}</head>${html}`
 }
 
 function escapeAttribute(value: string): string {
