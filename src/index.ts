@@ -18,6 +18,8 @@ declare module '@deepseek-ai/cordis' {
     tools: ToolsService
     connection: {
       register?: (ctx: Context, path: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>, options?: unknown) => () => void
+      /** Not part of the upstream connection service's published type; some hosts expose it as a runtime convenience for pushing an event to all connected clients. */
+      broadcast?: (event: string, payload?: unknown) => void
       rpc: {
         handle: (ctx: Context, path: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>, options?: unknown) => () => void
       }
@@ -34,7 +36,7 @@ export function apply(ctx: Context, config: Config) {
       // Ignored
     }
     try {
-      ;(ctx.connection as any).broadcast?.('ui-tools/changed')
+      ctx.connection.broadcast?.('ui-tools/changed')
     } catch {
       // Ignored
     }
