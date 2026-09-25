@@ -35,7 +35,7 @@ describe('Config Schema Validation', () => {
       },
     }
 
-    const parsed = Config(raw)
+    const parsed: any = Config(raw as any)
     expect(parsed.servers.powerhive.transport).toBe('stdio')
     expect(parsed.servers.powerhive.command).toBe('go')
     expect(parsed.servers.powerhive.toolCallTimeoutMs).toBe(30000)
@@ -69,7 +69,7 @@ describe('Config Schema Validation', () => {
       },
     }
 
-    const parsed = Config(raw)
+    const parsed: any = Config(raw as any)
     expect(parsed.servers.trusted.allowAppToolCalls).toBe(true)
     expect(parsed.servers.untrusted.allowAppToolCalls).toBe(false)
   })
@@ -84,7 +84,7 @@ describe('Config Schema Validation', () => {
       },
     }
 
-    const parsed = Config(raw)
+    const parsed: any = Config(raw as any)
     expect(parsed.servers.local.transport).toBe('stdio')
     expect(parsed.servers.local.command).toBe('python3')
   })
@@ -98,7 +98,7 @@ describe('Config Schema Validation', () => {
       },
     }
 
-    expect(() => Config(raw)).toThrow()
+    expect(() => Config(raw as any)).toThrow()
   })
 
   it('rejects invalid ipc configuration lacking socketPath', () => {
@@ -110,7 +110,7 @@ describe('Config Schema Validation', () => {
       },
     }
 
-    expect(() => Config(raw)).toThrow()
+    expect(() => Config(raw as any)).toThrow()
   })
 })
 

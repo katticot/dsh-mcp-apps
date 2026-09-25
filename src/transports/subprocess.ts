@@ -10,7 +10,7 @@ export interface ManagedStdio {
 export function createStdioTransport(config: StdioServerConfig): ManagedStdio {
   const expandedEnv = expandEnvVars(config.env)
   const safeEnv = {
-    ...scrubbedParentEnv(process.env),
+    ...scrubbedParentEnv(),
     ...expandedEnv,
   }
 

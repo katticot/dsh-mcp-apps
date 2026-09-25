@@ -39,7 +39,7 @@ export function apply(ctx: ClientContext) {
               key: tool.publicName,
             }, (props: unknown) => (
               <McpAppToolView
-                {...(props as object)}
+                {...(props as any)}
                 tool={tool}
                 connection={connection}
               />
