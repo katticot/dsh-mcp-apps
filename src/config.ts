@@ -16,6 +16,7 @@ export interface StdioServerConfig {
   env?: Record<string, string>
   cwd?: string
   toolCallTimeoutMs?: number
+  reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
 }
 
@@ -32,6 +33,7 @@ export interface IpcServerConfig {
   transport: 'ipc'
   socketPath: string
   toolCallTimeoutMs?: number
+  reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
 }
 
