@@ -207,7 +207,7 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
 
     const bridge = new AppBridge(null, {
       name: 'DeepSeek Harness',
-      version: '0.1.0',
+      version: __PKG_VERSION__,
     }, {
       serverTools: {},
       serverResources: {},
