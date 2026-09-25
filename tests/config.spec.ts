@@ -210,4 +210,30 @@ describe('Environment Variable Expansion', () => {
     expect(expandEnvString('${DSH_INTERNAL_TOKEN}', env, new Set(['DSH_INTERNAL_TOKEN']))).toBe('super-secret')
     expect(expandEnvString('${API_SECRET_KEY}', env, new Set(['API_SECRET_KEY']))).toBe('secret-123')
   })
+
+  it('blocks reading agent-socket variables (SSH_AUTH_SOCK, GPG_AGENT_INFO) unless explicitly allowed', () => {
+    const env = {
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
+      GPG_AGENT_INFO: '/tmp/gpg-agent:0:1',
+    }
+
+    expect(expandEnvString('${SSH_AUTH_SOCK}', env)).toBe('')
+    expect(expandEnvString('${GPG_AGENT_INFO}', env)).toBe('')
+
+    expect(expandEnvString('${SSH_AUTH_SOCK}', env, new Set(['SSH_AUTH_SOCK']))).toBe('/tmp/ssh-agent.sock')
+    expect(expandEnvString('${GPG_AGENT_INFO}', env, new Set(['GPG_AGENT_INFO']))).toBe('/tmp/gpg-agent:0:1')
+  })
+
+  it('supports allowedVars end-to-end via expandEnvVars for headers and env dicts', () => {
+    const env = { API_TOKEN: 'tok-abc123' }
+    const headers = { Authorization: 'Bearer ${API_TOKEN}' }
+
+    // Blocked by default (matches SENSITIVE_ENV_PATTERN via "TOKEN")
+    expect(expandEnvVars(headers, env)).toEqual({ Authorization: 'Bearer ' })
+
+    // Allowed explicitly
+    expect(expandEnvVars(headers, env, new Set(['API_TOKEN']))).toEqual({
+      Authorization: 'Bearer tok-abc123',
+    })
+  })
 })
