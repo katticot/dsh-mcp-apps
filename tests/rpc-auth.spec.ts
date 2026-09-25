@@ -223,7 +223,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       request: vi.fn().mockResolvedValue('allowed-once'),
     }
     const mockAgents = {
-      get: vi.fn().mockReturnValue({ id: 'agent-sec' }),
+      get: vi.fn().mockReturnValue({ id: 'agent-sec', status: 'running' }),
     }
 
     let secureRpcHandler: any
@@ -274,7 +274,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     })
 
     expect(mockApproval.request).toHaveBeenCalledWith(expect.objectContaining({
-      agent: { id: 'agent-sec' },
+      agent: expect.objectContaining({ id: 'agent-sec' }),
       toolName: 'write_db',
       callId: 'c-sec-1',
     }))

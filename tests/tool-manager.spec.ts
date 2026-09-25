@@ -355,4 +355,42 @@ describe('ServerToolManager', () => {
     expect(registered).toHaveLength(2)
     expect(registered[0]).not.toEqual(registered[1])
   })
+
+  it('drops out-of-order tool refresh responses so the newest list wins', async () => {
+    const syncSpy = vi.fn()
+    const mockToolManager = {
+      syncServerTools: syncSpy,
+      getUiToolsSnapshot: () => [],
+      evictServer: vi.fn(),
+    } as any
+
+    const pool = new ServerPool({} as any, { servers: {} }, mockToolManager)
+
+    // Simulate two concurrent listTools calls where call 1 resolves AFTER call 2
+    let resolveFirst!: (value: any) => void
+    const firstCallPromise = new Promise(resolve => { resolveFirst = resolve })
+
+    const mockClient = {
+      listTools: vi.fn()
+        .mockImplementationOnce(() => firstCallPromise)
+        .mockImplementationOnce(async () => ({ tools: [{ name: 'v2_tool', inputSchema: {} }] })),
+      setNotificationHandler: vi.fn(),
+    } as any
+
+    // Trigger refresh 1
+    const p1 = (pool as any).refreshTools('srv', mockClient)
+    // Trigger refresh 2
+    const p2 = (pool as any).refreshTools('srv', mockClient)
+
+    await p2
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect(syncSpy).toHaveBeenLastCalledWith('srv', mockClient, [{ name: 'v2_tool', inputSchema: {} }], undefined)
+
+    // Now resolve the first call late
+    resolveFirst({ tools: [{ name: 'v1_tool', inputSchema: {} }] })
+    await p1
+
+    // Should still have been called only once, ignoring stale v1_tool
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+  })
 })
