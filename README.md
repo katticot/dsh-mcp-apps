@@ -109,6 +109,20 @@ Add the plugin to your profile configuration (e.g. `~/.dsh/cordis.patch.yml` or 
 | `servers.<id>.toolCallTimeoutMs` | `number` | `30000` | Per-server tool call timeout in ms. |
 | `servers.<id>.allowedVars` | `string[]` | `[]` | Env var names this server may read via `${VAR}` expansion (in `env` or `headers`) despite being `DSH_*`-prefixed, secret-shaped (`KEY`/`PASSWORD`/`SECRET`/`TOKEN`), or an agent socket (`SSH_AUTH_SOCK`, `GPG_AGENT_INFO`), which are blocked by default. E.g. `allowedVars: ['API_TOKEN']` lets `headers: { Authorization: 'Bearer ${API_TOKEN}' }` resolve (for `stdio`, `sse`, `streamable-http`). |
 
+### Windows IPC (limitation)
+
+On POSIX, the `ipc` transport verifies before connecting that the socket's
+parent directory is `0700` and that both the directory and the socket file
+are owned by the current user, refusing to connect otherwise. **Windows has
+no equivalent check implemented.** There is no cross-platform, dependency-free
+way to inspect a named pipe's ACL from Node without a native addon, so rather
+than silently skipping the check, `IpcClientTransport` logs a `console.warn`
+identifying the gap every time it connects on `win32` and connects anyway
+(it fails open, not closed, since a hard failure would make `ipc` entirely
+unusable on Windows for a check we can't perform). If you use the `ipc`
+transport on Windows, make sure the named pipe itself is protected by an
+appropriate ACL — the plugin cannot verify this for you on that platform.
+
 ---
 
 ## Development & Testing

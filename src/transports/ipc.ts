@@ -47,6 +47,17 @@ export class IpcClientTransport implements Transport {
       if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
         throw new Error(`Security violation: IPC socket ${this.socketPath} is owned by UID ${stat.uid}, expected ${process.getuid()}`)
       }
+    } else {
+      // Windows has no equivalent of the POSIX UID/mode checks above, and
+      // implementing real Windows ACL verification is out of scope here.
+      // Fail open (connect anyway) rather than silently skip the check:
+      // make the gap loud so operators can compensate (e.g. named pipe ACLs
+      // set up out-of-band). See README "Windows IPC" for details.
+      console.warn(
+        `mcp-apps: running on Windows — IPC socket ownership/permission (ACL) verification is not implemented. ` +
+        `Connecting to "${this.socketPath}" without verifying who owns or can access it. ` +
+        `Ensure the socket/pipe is protected by an appropriate ACL yourself.`
+      )
     }
 
     return new Promise((resolve, reject) => {
