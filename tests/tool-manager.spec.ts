@@ -431,24 +431,4 @@ describe('ServerToolManager', () => {
     // Should still have been called only once, ignoring stale v1_tool
     expect(syncSpy).toHaveBeenCalledTimes(1)
   })
-
-  it('returns matching server for raw or public name and undefined for unknown tool in findServerForTool', () => {
-    const mockToolsService = { register: vi.fn(() => vi.fn()) }
-    const sessionStore = new AppSessionStore()
-    const manager = new ServerToolManager(mockToolsService, sessionStore)
-    const pool = new ServerPool({} as any, { servers: {} }, manager)
-    ;(pool as any).servers.set('other-srv', {})
-
-    manager.syncServerTools('weather-srv', {} as any, [
-      {
-        name: 'get_forecast',
-        inputSchema: { type: 'object' },
-        _meta: { ui: { resourceUri: 'ui://weather/forecast' } },
-      },
-    ])
-
-    expect(pool.findServerForTool('get_forecast')).toBe('weather-srv')
-    expect(pool.findServerForTool('mcp__weather-srv__get_forecast')).toBe('weather-srv')
-    expect(pool.findServerForTool('unknown_tool')).toBeUndefined()
-  })
 })

@@ -1,13 +1,15 @@
 import React from 'react'
-import { McpAppToolView, type ClientConnectionRpc, type UiToolInfo } from './McpAppToolView'
+import { McpAppToolView, type ClientConnectionRpc, type McpAppToolViewProps, type UiToolInfo } from './McpAppToolView'
 
 export const inject = ['connection', 'slots']
+
+export type ToolViewSlotProps = Omit<McpAppToolViewProps, 'tool' | 'connection'>
 
 interface ClientContext {
   connection: ClientConnectionRpc
   slots: {
     inject: (name: string, callback: () => () => void) => () => void
-    register: (descriptor: { name: string; key: string }, component: (props: unknown) => React.ReactElement) => () => void
+    register: (descriptor: { name: string; key: string }, component: (props: ToolViewSlotProps) => React.ReactElement) => () => void
   }
   effect: (callback: () => void | (() => void), name?: string) => void
   on?: (event: string, listener: (...args: unknown[]) => void) => () => void
@@ -37,9 +39,9 @@ export function apply(ctx: ClientContext) {
             return ctx.slots.register({
               name: 'tool.call.toolview',
               key: tool.publicName,
-            }, (props: unknown) => (
+            }, (props: ToolViewSlotProps) => (
               <McpAppToolView
-                {...(props as any)}
+                {...props}
                 tool={tool}
                 connection={connection}
               />
