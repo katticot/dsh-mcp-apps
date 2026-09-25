@@ -97,12 +97,23 @@ export const Config: Schema<Config> = Schema.object({
   defaultTimeoutMs: Schema.number().default(30000),
 })
 
+import { DSH_ENV_PREFIX, SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'
+
 /**
  * Expands environment variable expressions like `${FOO}` or `${FOO:-default}`
  * using the provided environment (defaulting to process.env).
+ * Blocks reading DSH_* and sensitive secret patterns unless explicitly included in allowedVars.
  */
-export function expandEnvString(value: string, env: Record<string, string | undefined> = process.env): string {
+export function expandEnvString(
+  value: string,
+  env: Record<string, string | undefined> = process.env,
+  allowedVars?: Set<string>
+): string {
   return value.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)(?::-([^}]*))?\}/g, (_, varName, defaultValue) => {
+    const isBlocked = (varName.startsWith(DSH_ENV_PREFIX) || SENSITIVE_ENV_PATTERN.test(varName)) && !allowedVars?.has(varName)
+    if (isBlocked) {
+      return defaultValue ?? ''
+    }
     const val = env[varName]
     if (val !== undefined && val !== '') {
       return val
@@ -116,12 +127,13 @@ export function expandEnvString(value: string, env: Record<string, string | unde
  */
 export function expandEnvVars(
   dict?: Record<string, string>,
-  env: Record<string, string | undefined> = process.env
+  env: Record<string, string | undefined> = process.env,
+  allowedVars?: Set<string>
 ): Record<string, string> {
   if (!dict) return {}
   const result: Record<string, string> = {}
   for (const [key, val] of Object.entries(dict)) {
-    result[key] = expandEnvString(val, env)
+    result[key] = expandEnvString(val, env, allowedVars)
   }
   return result
 }
