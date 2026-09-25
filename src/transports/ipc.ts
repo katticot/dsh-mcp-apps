@@ -1,13 +1,17 @@
 import net from 'node:net'
 import fs from 'node:fs'
 import path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { IpcServerConfig } from '../config'
 
+export const MAX_IPC_BUFFER_SIZE = 16 * 1024 * 1024 // 16 MB
+
 export class IpcClientTransport implements Transport {
   private socket: net.Socket | null = null
   private buffer = ''
+  private decoder = new StringDecoder('utf8')
   private socketPath: string
 
   onclose?: () => void
@@ -21,6 +25,18 @@ export class IpcClientTransport implements Transport {
   async start(): Promise<void> {
     const isPosix = process.platform !== 'win32'
     if (isPosix) {
+      const dir = path.dirname(this.socketPath)
+      if (fs.existsSync(dir)) {
+        const dirStat = fs.statSync(dir)
+        if (typeof process.getuid === 'function' && dirStat.uid !== process.getuid()) {
+          throw new Error(`Security violation: IPC directory ${dir} is owned by UID ${dirStat.uid}, expected ${process.getuid()}`)
+        }
+        const mode = dirStat.mode & 0o777
+        if (mode !== 0o700) {
+          throw new Error(`Security violation: IPC directory ${dir} mode is 0${mode.toString(8)}, expected 0700`)
+        }
+      }
+
       if (!fs.existsSync(this.socketPath)) {
         throw new Error(`IPC socket not found: ${this.socketPath}`)
       }
@@ -47,20 +63,11 @@ export class IpcClientTransport implements Transport {
       }
       socket.once('error', onErrorBeforeConnect)
 
-      socket.on('data', (chunk) => {
-        this.buffer += chunk.toString('utf8')
-        let newlineIndex: number
-        while ((newlineIndex = this.buffer.indexOf('\n')) !== -1) {
-          const line = this.buffer.slice(0, newlineIndex).trim()
-          this.buffer = this.buffer.slice(newlineIndex + 1)
-          if (line) {
-            try {
-              const parsed = JSON.parse(line) as JSONRPCMessage
-              this.onmessage?.(parsed)
-            } catch (err) {
-              this.onerror?.(err instanceof Error ? err : new Error(String(err)))
-            }
-          }
+      socket.on('data', (chunk: Buffer) => {
+        try {
+          this.handleChunk(chunk)
+        } catch (err) {
+          this.onerror?.(err instanceof Error ? err : new Error(String(err)))
         }
       })
 
@@ -92,5 +99,26 @@ export class IpcClientTransport implements Transport {
         else resolve()
       })
     })
+  }
+
+  private handleChunk(chunk: Buffer): void {
+    this.buffer += this.decoder.write(chunk)
+    if (this.buffer.length > MAX_IPC_BUFFER_SIZE) {
+      this.close()
+      throw new Error(`IPC message size exceeded maximum limit of ${MAX_IPC_BUFFER_SIZE} bytes`)
+    }
+    let newlineIndex: number
+    while ((newlineIndex = this.buffer.indexOf('\n')) !== -1) {
+      const line = this.buffer.slice(0, newlineIndex).trim()
+      this.buffer = this.buffer.slice(newlineIndex + 1)
+      if (line) {
+        try {
+          const parsed = JSON.parse(line) as JSONRPCMessage
+          this.onmessage?.(parsed)
+        } catch (err) {
+          this.onerror?.(err instanceof Error ? err : new Error(String(err)))
+        }
+      }
+    }
   }
 }
