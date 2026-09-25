@@ -159,6 +159,58 @@ describe('Config Schema Validation', () => {
     expect(valid.servers['valid-name']).toBeDefined()
     expect(valid.servers['valid_name_2']).toBeDefined()
   })
+
+  it('rejects a null server entry', () => {
+    const raw = {
+      servers: {
+        a: null,
+      },
+    }
+
+    expect(() => Config(raw)).toThrow()
+  })
+
+  it('rejects a negative or zero toolCallTimeoutMs', () => {
+    expect(() => Config({
+      servers: {
+        a: { transport: 'stdio', command: 'x', toolCallTimeoutMs: -5 },
+      },
+    })).toThrow()
+
+    expect(() => Config({
+      servers: {
+        a: { transport: 'stdio', command: 'x', toolCallTimeoutMs: 0 },
+      },
+    })).toThrow()
+  })
+
+  it('rejects a negative or zero defaultTimeoutMs', () => {
+    expect(() => Config({ servers: {}, defaultTimeoutMs: 0 })).toThrow()
+    expect(() => Config({ servers: {}, defaultTimeoutMs: -1 })).toThrow()
+  })
+
+  it('rejects an invalid url for remote servers', () => {
+    expect(() => Config({
+      servers: {
+        a: { transport: 'sse', url: 'not a url' },
+      },
+    })).toThrow()
+
+    expect(() => Config({
+      servers: {
+        a: { transport: 'streamable-http', url: 'ftp://example.com' },
+      },
+    })).toThrow()
+  })
+
+  it('accepts valid http(s)/ws(s) urls for remote servers', () => {
+    expect(() => Config({
+      servers: {
+        a: { transport: 'sse', url: 'https://mcp.example.com/sse' },
+        b: { transport: 'websocket', url: 'wss://mcp.example.com/ws' },
+      },
+    })).not.toThrow()
+  })
 })
 
 describe('Environment Variable Expansion', () => {
@@ -209,5 +261,18 @@ describe('Environment Variable Expansion', () => {
     // Explicitly allowed
     expect(expandEnvString('${DSH_INTERNAL_TOKEN}', env, new Set(['DSH_INTERNAL_TOKEN']))).toBe('super-secret')
     expect(expandEnvString('${API_SECRET_KEY}', env, new Set(['API_SECRET_KEY']))).toBe('secret-123')
+  })
+
+  it('treats $$ as an escaped literal $, not the start of a variable', () => {
+    expect(expandEnvString('price: $$${PORT}', mockEnv)).toBe('price: $8080')
+    expect(expandEnvString('$$FOO', mockEnv)).toBe('$FOO')
+    expect(expandEnvString('$$', mockEnv)).toBe('$')
+  })
+
+  it('documents that a ${VAR} default cannot itself contain a nested ${VAR}', () => {
+    // Known limitation: the default-value branch stops at the first `}`,
+    // so it cannot parse a nested expansion. This test pins the current,
+    // documented behavior rather than the ideal one.
+    expect(expandEnvString('${MISSING:-${PORT}}', mockEnv)).toBe('${PORT}')
   })
 })
