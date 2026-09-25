@@ -20,7 +20,9 @@ export function apply(ctx: Context, config: Config) {
     const inFlight = new Set<Promise<unknown>>()
 
     const connectionProto = Object.getPrototypeOf(ctx.connection)
-    const registerFn = typeof connectionProto.register === 'function'
+    const registerFn = typeof ctx.connection?.register === 'function'
+      ? ctx.connection.register.bind(ctx.connection)
+      : typeof connectionProto?.register === 'function'
       ? connectionProto.register.bind(ctx.connection)
       : ctx.connection.rpc.handle.bind(ctx.connection.rpc)
 
@@ -54,28 +56,29 @@ export function apply(ctx: Context, config: Config) {
 
             case 'tools/call': {
               const sessionToken = typeof params.sessionToken === 'string' ? params.sessionToken : undefined
-              const session = sessionStore.get(sessionToken)
-              const toolName = typeof params.name === 'string' ? params.name : ''
+              if (!sessionToken) {
+                return { ok: false, error: { code: 'unauthorized', message: 'Missing session token' } }
+              }
 
-              let targetServer: string | undefined
-              if (session) {
-                if (!session.allowedReverseTools.has(toolName)) {
-                  return { ok: false, error: { code: 'forbidden', message: `Tool "${toolName}" is not permitted for this session` } }
-                }
-                targetServer = session.serverName
-              } else {
-                const serverHint = typeof params.server === 'string' ? params.server : undefined
-                targetServer = serverHint || pool.findServerForTool(toolName)
-                if (!targetServer) {
-                  return { ok: false, error: { code: 'unauthorized', message: `No active session or server found for tool "${toolName}"` } }
-                }
+              const session = sessionStore.get(sessionToken)
+              if (!session) {
+                return { ok: false, error: { code: 'unauthorized', message: 'Invalid or expired session token' } }
+              }
+
+              if (params.server && typeof params.server === 'string' && params.server !== session.serverName) {
+                return { ok: false, error: { code: 'forbidden', message: 'Tool belongs to a different server' } }
+              }
+
+              const toolName = typeof params.name === 'string' ? params.name : ''
+              if (!session.allowedReverseTools.has(toolName)) {
+                return { ok: false, error: { code: 'forbidden', message: `Tool "${toolName}" is not permitted for this session` } }
               }
 
               const args = typeof params.arguments === 'object' && params.arguments !== null
                 ? params.arguments as Record<string, unknown>
                 : {}
 
-              const result = await pool.callTool(targetServer, toolName, args, signal)
+              const result = await pool.callTool(session.serverName, toolName, args, signal)
               return { ok: true, value: result }
             }
 
@@ -116,7 +119,7 @@ export function apply(ctx: Context, config: Config) {
       // Clean up server pool and all tool registrations
       await pool.stopAll()
       toolManager.disposeAll()
-      sessionStore.clear()
+      sessionStore.dispose()
     }
   }, 'mcp-apps: lifecycle coordinator')
 }
