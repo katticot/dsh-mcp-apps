@@ -170,7 +170,7 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
     connectionRef.current.rpc.call(
       '/mcp-apps',
       'resources/read',
-      { uri: resourceUri, server: serverName },
+      { uri: resourceUri, server: serverName, sessionToken },
       controller.signal
     ).then((res) => {
       if (!res.ok) throw new Error(res.error.message)
@@ -232,6 +232,7 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
     bridge.onlistresources = async (_params, extra) => {
       const res = await connectionRef.current.rpc.call('/mcp-apps', 'resources/list', {
         server: serverName,
+        sessionToken,
       }, extra?.signal)
       if (!res.ok) throw new Error(res.error.message)
       return res.value as never
@@ -241,6 +242,7 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
       const res = await connectionRef.current.rpc.call('/mcp-apps', 'resources/read-raw', {
         server: serverName,
         uri: params.uri,
+        sessionToken,
       }, extra?.signal)
       if (!res.ok) throw new Error(res.error.message)
       return res.value as never

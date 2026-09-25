@@ -47,6 +47,25 @@ export function apply(ctx: Context, config: Config) {
     let isDraining = false
     const inFlight = new Set<Promise<unknown>>()
 
+    type SessionResult =
+      | { session: import('./session-store').AppSession }
+      | { error: { ok: false; error: { code: string; message: string } } }
+
+    const requireSession = (params: Record<string, unknown>): SessionResult => {
+      const sessionToken = typeof params.sessionToken === 'string' ? params.sessionToken : undefined
+      if (!sessionToken) {
+        return { error: { ok: false, error: { code: 'unauthorized', message: 'Missing session token' } } }
+      }
+      const session = sessionStore.get(sessionToken)
+      if (!session) {
+        return { error: { ok: false, error: { code: 'unauthorized', message: 'Invalid or expired session token' } } }
+      }
+      if (params.server && typeof params.server === 'string' && params.server !== session.serverName) {
+        return { error: { ok: false, error: { code: 'forbidden', message: 'Resource belongs to a different server' } } }
+      }
+      return { session }
+    }
+
     const connectionProto = Object.getPrototypeOf(ctx.connection)
     const registerFn = typeof ctx.connection?.register === 'function'
       ? ctx.connection.register.bind(ctx.connection)
@@ -70,25 +89,28 @@ export function apply(ctx: Context, config: Config) {
             }
 
             case 'resources/list': {
-              const server = typeof params.server === 'string' ? params.server : undefined
-              const resources = await pool.listResources(server)
+              const session = requireSession(params)
+              if ('error' in session) return session.error
+              const resources = await pool.listResources(session.session.serverName)
               return { ok: true, value: resources }
             }
 
             case 'resources/read': {
+              const session = requireSession(params)
+              if ('error' in session) return session.error
               const uri = typeof params.uri === 'string' ? params.uri : undefined
-              const server = typeof params.server === 'string' ? params.server : undefined
-              const resource = await pool.readResource(server, uri, signal)
+              const resource = await pool.readResource(session.session.serverName, uri, signal)
               return { ok: true, value: resource }
             }
 
             case 'resources/read-raw': {
+              const session = requireSession(params)
+              if ('error' in session) return session.error
               const uri = typeof params.uri === 'string' ? params.uri : undefined
-              const server = typeof params.server === 'string' ? params.server : undefined
               if (!uri) {
                 return { ok: false, error: { code: 'bad-request', message: 'Missing uri parameter' } }
               }
-              const raw = await pool.readResourceRaw(server, uri, signal)
+              const raw = await pool.readResourceRaw(session.session.serverName, uri, signal)
               return { ok: true, value: raw }
             }
 
