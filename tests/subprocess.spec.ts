@@ -26,6 +26,28 @@ describe('Stdio Transport Environment Scrubbing', () => {
     expect(spawnedEnv.GPG_AGENT_INFO).toBeUndefined()
   })
 
+  it('expands a normally-blocked ${VAR} in config.env when listed in allowedVars', () => {
+    process.env.API_TOKEN = 'tok-abc123'
+    try {
+      const blocked = createStdioTransport({
+        transport: 'stdio',
+        command: 'some-mcp-server',
+        env: { API_TOKEN: '${API_TOKEN}' },
+      })
+      expect((blocked.transport as any)._serverParams.env.API_TOKEN).toBe('')
+
+      const allowed = createStdioTransport({
+        transport: 'stdio',
+        command: 'some-mcp-server',
+        env: { API_TOKEN: '${API_TOKEN}' },
+        allowedVars: ['API_TOKEN'],
+      })
+      expect((allowed.transport as any)._serverParams.env.API_TOKEN).toBe('tok-abc123')
+    } finally {
+      delete process.env.API_TOKEN
+    }
+  })
+
   it('still allows an explicit config.env value to pass through', () => {
     process.env.SSH_AUTH_SOCK = '/tmp/ssh-agent.sock'
 

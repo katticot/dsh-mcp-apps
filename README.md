@@ -107,6 +107,7 @@ Add the plugin to your profile configuration (e.g. `~/.dsh/cordis.patch.yml` or 
 | `servers.<id>.headers` | `Record<string, string>` | `{}` | Custom HTTP headers (for `sse`, `streamable-http`). |
 | `servers.<id>.socketPath` | `string` | — | Local Unix socket path with UID verification (for `ipc`). |
 | `servers.<id>.toolCallTimeoutMs` | `number` | `30000` | Per-server tool call timeout in ms. |
+| `servers.<id>.allowedVars` | `string[]` | `[]` | Env var names this server may read via `${VAR}` expansion (in `env` or `headers`) despite being `DSH_*`-prefixed, secret-shaped (`KEY`/`PASSWORD`/`SECRET`/`TOKEN`), or an agent socket (`SSH_AUTH_SOCK`, `GPG_AGENT_INFO`), which are blocked by default. E.g. `allowedVars: ['API_TOKEN']` lets `headers: { Authorization: 'Bearer ${API_TOKEN}' }` resolve (for `stdio`, `sse`, `streamable-http`). |
 
 ---
 

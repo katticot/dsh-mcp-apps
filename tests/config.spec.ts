@@ -55,6 +55,29 @@ describe('Config Schema Validation', () => {
     expect(parsed.servers.localIpc.allowAppToolCalls).toBe(false)
   })
 
+  it('defaults allowedVars to an empty array and accepts an explicit list', () => {
+    const raw = {
+      servers: {
+        plain: { transport: 'stdio', command: 'node' },
+        withAllowlist: {
+          transport: 'stdio',
+          command: 'node',
+          allowedVars: ['API_TOKEN'],
+        },
+        remoteWithAllowlist: {
+          transport: 'sse',
+          url: 'https://mcp.example.com/sse',
+          allowedVars: ['API_TOKEN'],
+        },
+      },
+    }
+
+    const parsed: any = Config(raw as any)
+    expect(parsed.servers.plain.allowedVars).toEqual([])
+    expect(parsed.servers.withAllowlist.allowedVars).toEqual(['API_TOKEN'])
+    expect(parsed.servers.remoteWithAllowlist.allowedVars).toEqual(['API_TOKEN'])
+  })
+
   it('allows enabling allowAppToolCalls per server', () => {
     const raw = {
       servers: {
