@@ -120,6 +120,8 @@ export class ServerPool {
     }
     this.servers.set(serverName, instance)
 
+    client.onclose = () => this.handleServerClose(serverName)
+
     // Dynamic tool change subscription (attached BEFORE initial sync)
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       try {
@@ -191,7 +193,9 @@ export class ServerPool {
       throw new Error(`MCP server "${targetServer}" is not connected`)
     }
 
-    const response = await instance.client.readResource({ uri })
+    const serverConfig = this.config.servers[targetServer]
+    const timeout = serverConfig?.toolCallTimeoutMs ?? this.config.defaultTimeoutMs ?? 30000
+    const response = await instance.client.readResource({ uri }, { timeout, signal })
     if (!response.contents || response.contents.length !== 1) {
       throw new Error(`Resource ${uri} returned invalid content items`)
     }
@@ -229,18 +233,65 @@ export class ServerPool {
     if (!instance) {
       throw new Error(`MCP server "${serverName}" is not connected`)
     }
+    const serverConfig = this.config.servers[serverName]
+    const timeout = serverConfig?.toolCallTimeoutMs ?? this.config.defaultTimeoutMs ?? 30000
     return instance.client.callTool(
       {
         name,
         arguments: args ?? {},
       },
       undefined,
-      { signal }
+      { timeout, signal }
     )
+  }
+
+  private reconnectAttempts = new Map<string, number>()
+  private reconnectTimers = new Map<string, NodeJS.Timeout>()
+
+  handleServerClose(serverName: string): void {
+    this.toolManager.evictServer(serverName)
+    this.servers.delete(serverName)
+
+    if (this.lifecycleController.signal.aborted) return
+
+    const serverConfig = this.config.servers[serverName]
+    const opts = serverConfig?.reconnectOptions
+    if (!opts) return
+
+    const attempts = this.reconnectAttempts.get(serverName) ?? 0
+    const maxRetries = opts.maxRetries ?? 5
+    if (attempts >= maxRetries) {
+      console.warn(`mcp-apps: max reconnect attempts reached for "${serverName}"`)
+      return
+    }
+
+    const factor = opts.backoffFactor ?? 1.5
+    const initial = opts.initialDelayMs ?? 1000
+    const maxDelay = opts.maxDelayMs ?? 30000
+    const delay = Math.min(initial * Math.pow(factor, attempts), maxDelay)
+
+    this.reconnectAttempts.set(serverName, attempts + 1)
+    const timer = setTimeout(async () => {
+      try {
+        if (!this.lifecycleController.signal.aborted) {
+          await this.startServer(serverName, serverConfig, this.lifecycleController.signal)
+          this.reconnectAttempts.delete(serverName)
+        }
+      } catch (err) {
+        console.error(`mcp-apps: reconnect attempt failed for "${serverName}":`, err)
+      }
+    }, delay)
+    this.reconnectTimers.set(serverName, timer)
   }
 
   async stopAll(): Promise<void> {
     this.lifecycleController.abort()
+    for (const timer of this.reconnectTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.reconnectTimers.clear()
+    this.reconnectAttempts.clear()
+
     await Promise.allSettled(Array.from(this.startupTasks.values()))
 
     for (const [name, instance] of this.servers.entries()) {

@@ -42,4 +42,43 @@ describe('ServerPool Lifecycle', () => {
     await expect(startPromise).resolves.not.toThrow()
     expect((pool as any).servers.size).toBe(0)
   })
+
+  it('forwards timeout and signal into client.callTool', async () => {
+    const mockClient = { callTool: vi.fn().mockResolvedValue({ content: [] }) }
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd', toolCallTimeoutMs: 5000 } },
+    }, { getUiToolsSnapshot: () => [] } as any)
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport: vi.fn() })
+
+    const controller = new AbortController()
+    await pool.callTool('srv', 'test_tool', { a: 1 }, controller.signal)
+
+    expect(mockClient.callTool).toHaveBeenCalledWith(
+      { name: 'test_tool', arguments: { a: 1 } },
+      undefined,
+      { timeout: 5000, signal: controller.signal }
+    )
+  })
+
+  it('evicts server tools on close and schedules reconnection with backoff', async () => {
+    vi.useFakeTimers()
+    const evictSpy = vi.fn()
+    const pool = new ServerPool({} as any, {
+      servers: {
+        reconnectingSrv: {
+          transport: 'stdio',
+          command: 'cmd',
+          reconnectOptions: { maxRetries: 3, initialDelayMs: 1000, backoffFactor: 2 },
+        } as any,
+      },
+    }, { evictServer: evictSpy, getUiToolsSnapshot: () => [] } as any)
+
+    const startSpy = vi.spyOn(pool, 'startServer').mockResolvedValue()
+    ;(pool as any).handleServerClose('reconnectingSrv')
+
+    expect(evictSpy).toHaveBeenCalledWith('reconnectingSrv')
+    vi.advanceTimersByTime(1000)
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
 })
