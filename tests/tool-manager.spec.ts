@@ -277,4 +277,82 @@ describe('ServerToolManager', () => {
     expect(pool.findServerForTool('mcp__weather-srv__get_forecast')).toBe('weather-srv')
     expect(pool.findServerForTool('unknown_tool')).toBeUndefined()
   })
+
+  it('skips a bad tool mid-list without failing remaining tools', () => {
+    const registered: string[] = []
+    const mockToolsService = {
+      register: vi.fn((def: any) => {
+        registered.push(def.name)
+        return vi.fn()
+      }),
+    }
+    const manager = new ServerToolManager(mockToolsService, new AppSessionStore())
+
+    const tools: Tool[] = [
+      { name: 'tool_one', inputSchema: { type: 'object' } },
+      {
+        name: 'bad_tool',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { resourceUri: 'https://invalid-non-ui-scheme.com' } },
+      },
+      { name: 'tool_three', inputSchema: { type: 'object' } },
+    ]
+
+    manager.syncServerTools('test-srv', {} as any, tools)
+    expect(registered).toContain('mcp__test-srv__tool_one')
+    expect(registered).not.toContain('mcp__test-srv__bad_tool')
+    expect(registered).toContain('mcp__test-srv__tool_three')
+  })
+
+  it('re-registers tools whose definition changed and retains unchanged ones', () => {
+    const disposed: string[] = []
+    const registered: string[] = []
+    const mockToolsService = {
+      register: vi.fn((def: any) => {
+        registered.push(def.name)
+        return () => disposed.push(def.name)
+      }),
+    }
+    const manager = new ServerToolManager(mockToolsService, new AppSessionStore())
+
+    const initialTools: Tool[] = [
+      { name: 'stable_tool', description: 'v1', inputSchema: { type: 'object' } },
+      { name: 'changing_tool', description: 'v1', inputSchema: { type: 'object' } },
+    ]
+
+    manager.syncServerTools('test-srv', {} as any, initialTools)
+    expect(registered).toHaveLength(2)
+
+    // Re-sync with changed description
+    const updatedTools: Tool[] = [
+      { name: 'stable_tool', description: 'v1', inputSchema: { type: 'object' } },
+      { name: 'changing_tool', description: 'v2 modified', inputSchema: { type: 'object' } },
+    ]
+
+    manager.syncServerTools('test-srv', {} as any, updatedTools)
+    // changing_tool disposed and re-registered
+    expect(disposed).toContain('mcp__test-srv__changing_tool')
+    expect(disposed).not.toContain('mcp__test-srv__stable_tool')
+  })
+
+  it('detects duplicate public names and generates unique names with hash suffix', () => {
+    const registered: string[] = []
+    const mockToolsService = {
+      register: vi.fn((def: any) => {
+        registered.push(def.name)
+        return vi.fn()
+      }),
+    }
+    const manager = new ServerToolManager(mockToolsService, new AppSessionStore())
+
+    // Tools that would produce duplicate public names
+    const tools: Tool[] = [
+      { name: 'duplicate_tool', inputSchema: { type: 'object' } },
+      { name: 'duplicate_tool', inputSchema: { type: 'object' } },
+    ]
+    manager.syncServerTools('srv', {} as any, tools)
+
+    expect(registered).toHaveLength(2)
+    expect(registered[0]).not.toEqual(registered[1])
+  })
 })
