@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AppBridge, PostMessageTransport, buildAllowAttribute } from '@modelcontextprotocol/ext-apps/app-bridge'
 import { withContentSecurityPolicy } from './csp'
 
@@ -119,7 +119,7 @@ class ResilientPostMessageTransport {
 }
 
 export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAppToolViewProps) {
-  const disclosureState = useDisclosure ? useDisclosure() : null
+  const disclosureState = useDisclosure?.() ?? null
   const [localExpanded, setLocalExpanded] = useState(true)
   const isExpanded = disclosureState ? disclosureState[0] : localExpanded
 
@@ -132,20 +132,45 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
   }
 
   const call = useMemo(() => resolveSettledAppCall(block, tool), [block, tool])
+  const sessionToken = call?.sessionToken
+  const resourceUri = call?.resourceUri
+  const argsRaw = block.call?.argsRaw ?? block.argsRaw
+  const serverName = call?.serverName
+
   const [resource, setResource] = useState<ResourceData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [height, setHeight] = useState<number>(360)
+  const [activeSrcDoc, setActiveSrcDoc] = useState<string | null>(null)
+  const [navCount, setNavCount] = useState<number>(0)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
-  // 1. Fetch UI HTML resource once settled call is available
+  const connectionRef = useRef(connection)
+  connectionRef.current = connection
+
+  const bridgeRef = useRef<AppBridge | null>(null)
+  const transportRef = useRef<ResilientPostMessageTransport | null>(null)
+  const isInitializedRef = useRef(false)
+
+  // Sliding window resize tracking
+  const resizeTimestampsRef = useRef<number[]>([])
+  const pendingHeightRef = useRef<number | null>(null)
+  const resetTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Clear error and reset navigation counter when call targets change
   useEffect(() => {
-    if (!call) return
+    setError(null)
+    setNavCount(0)
+  }, [sessionToken, resourceUri, argsRaw])
+
+  // 1. Fetch UI HTML resource once settled call parameters are available
+  useEffect(() => {
+    if (!sessionToken || !resourceUri) return
     const controller = new AbortController()
 
-    connection.rpc.call(
+    connectionRef.current.rpc.call(
       '/mcp-apps',
       'resources/read',
-      { uri: call.resourceUri, server: call.serverName },
+      { uri: resourceUri, server: serverName },
       controller.signal
     ).then((res) => {
       if (!res.ok) throw new Error(res.error.message)
@@ -157,126 +182,174 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
     })
 
     return () => controller.abort()
-  }, [call, connection])
+  }, [sessionToken, resourceUri, serverName])
 
-  // 2. Connect AppBridge via ResilientPostMessageTransport on iframe mount
-  useEffect(() => {
-    if (!call || !resource) return
+  const htmlWithCsp = useMemo(() => {
+    if (!resource) return null
+    return withContentSecurityPolicy(resource.html, resource.csp, resource.permissions)
+  }, [resource])
+
+  // 2. Establish bridge and transport via useLayoutEffect, delaying srcDoc assignment until ready
+  useLayoutEffect(() => {
+    if (!sessionToken || !htmlWithCsp) return
     const iframe = iframeRef.current
     if (!iframe) return
 
-    let bridge: AppBridge | null = null
-    let transport: ResilientPostMessageTransport | null = null
-    let disposed = false
+    const contentWindow = iframe.contentWindow
+    if (!contentWindow) return
+
+    if (transportRef.current) {
+      void transportRef.current.close()
+    }
+
+    const transport = new ResilientPostMessageTransport(contentWindow)
+    transportRef.current = transport
+
+    const bridge = new AppBridge(null, {
+      name: 'DeepSeek Harness',
+      version: '0.1.0',
+    }, {
+      serverTools: {},
+      serverResources: {},
+    })
+    bridgeRef.current = bridge
+    isInitializedRef.current = false
 
     let lastHeight = 360
-    let resizeCounter = 0
-    let circuitBreakerTripped = false
-    let resetTimer: NodeJS.Timeout | null = null
+    let disposed = false
 
-    const initBridge = async () => {
-      const contentWindow = iframe.contentWindow
-      if (!contentWindow || disposed) return
+    bridge.oncalltool = async (params, extra) => {
+      const res = await connectionRef.current.rpc.call('/mcp-apps', 'tools/call', {
+        sessionToken,
+        server: serverName,
+        name: params.name,
+        arguments: params.arguments ?? {},
+      }, extra?.signal)
+      if (!res.ok) throw new Error(res.error.message)
+      return res.value as never
+    }
 
-      transport = new ResilientPostMessageTransport(contentWindow)
-      bridge = new AppBridge(null, {
-        name: 'DeepSeek Harness',
-        version: '0.1.0',
-      }, {
-        serverTools: {},
-        serverResources: {},
-      })
+    bridge.onlistresources = async (_params, extra) => {
+      const res = await connectionRef.current.rpc.call('/mcp-apps', 'resources/list', {
+        server: serverName,
+      }, extra?.signal)
+      if (!res.ok) throw new Error(res.error.message)
+      return res.value as never
+    }
 
-      // Reverse tool calling: UI calls a host tool
-      bridge.oncalltool = async (params, extra) => {
-        const res = await connection.rpc.call('/mcp-apps', 'tools/call', {
-          sessionToken: call.sessionToken,
-          server: call.serverName,
-          name: params.name,
-          arguments: params.arguments ?? {},
-        }, extra?.signal)
-        if (!res.ok) throw new Error(res.error.message)
-        return res.value as never
-      }
+    bridge.onreadresource = async (params, extra) => {
+      const res = await connectionRef.current.rpc.call('/mcp-apps', 'resources/read-raw', {
+        server: serverName,
+        uri: params.uri,
+      }, extra?.signal)
+      if (!res.ok) throw new Error(res.error.message)
+      return res.value as never
+    }
 
-      bridge.onlistresources = async (_params, extra) => {
-        const res = await connection.rpc.call('/mcp-apps', 'resources/list', {
-          server: call.serverName,
-        }, extra?.signal)
-        if (!res.ok) throw new Error(res.error.message)
-        return res.value as never
-      }
+    // Sliding-window resize defense: 1000ms window, max 10 events, flushes final height on unlock
+    bridge.onsizechange = (params) => {
+      if (typeof params.height !== 'number') return
+      const now = Date.now()
+      const windowMs = 1000
+      const maxEvents = 10
 
-      bridge.onreadresource = async (params, extra) => {
-        const res = await connection.rpc.call('/mcp-apps', 'resources/read-raw', {
-          server: call.serverName,
-          uri: params.uri,
-        }, extra?.signal)
-        if (!res.ok) throw new Error(res.error.message)
-        return res.value as never
-      }
+      resizeTimestampsRef.current = resizeTimestampsRef.current.filter(t => now - t < windowMs)
+      const clamped = Math.max(160, Math.min(Math.round(params.height), 1200))
+      pendingHeightRef.current = clamped
 
-      // Resize defense: hysteresis deadband, bounding clamp, 10Hz throttle, circuit breaker
-      bridge.onsizechange = (params) => {
-        if (circuitBreakerTripped || typeof params.height !== 'number') return
-        resizeCounter++
-        if (resizeCounter > 30) {
-          circuitBreakerTripped = true
-          console.warn('mcp-apps: Resize circuit breaker tripped! Muting resize.')
-          resetTimer = setTimeout(() => {
-            circuitBreakerTripped = false
-            resizeCounter = 0
-          }, 10000)
-          return
+      if (resizeTimestampsRef.current.length >= maxEvents) {
+        if (!resetTimerRef.current) {
+          const oldest = resizeTimestampsRef.current[0] ?? now
+          const waitTime = Math.max(50, windowMs - (now - oldest))
+          resetTimerRef.current = setTimeout(() => {
+            resetTimerRef.current = null
+            if (pendingHeightRef.current !== null && !disposed) {
+              lastHeight = pendingHeightRef.current
+              setHeight(pendingHeightRef.current)
+            }
+          }, waitTime)
         }
-
-        const clamped = Math.max(160, Math.min(Math.round(params.height), 1200))
-        if (Math.abs(clamped - lastHeight) >= 6) {
-          lastHeight = clamped
-          requestAnimationFrame(() => {
-            if (!disposed) setHeight(clamped)
-          })
-        }
+        return
       }
 
-      bridge.oninitialized = () => {
-        if (!disposed && bridge) {
-          bridge.sendToolInput({ arguments: call.arguments })
-            .then(() => {
-              if (call.result) {
-                const resPayload = (typeof call.result === 'object' && call.result !== null)
-                  ? (call.result as Record<string, unknown>)
-                  : { content: [{ type: 'text', text: String(call.result ?? '') }] }
-                void bridge?.sendToolResult(resPayload as never)
-              }
-            })
-            .catch((err) => console.warn('mcp-apps: error sending tool input/result', err))
-        }
-      }
-
-      try {
-        await bridge.connect(transport)
-      } catch (err) {
-        console.error('mcp-apps: bridge.connect failed', err)
+      resizeTimestampsRef.current.push(now)
+      if (Math.abs(clamped - lastHeight) >= 6) {
+        lastHeight = clamped
+        requestAnimationFrame(() => {
+          if (!disposed) setHeight(clamped)
+        })
       }
     }
 
-    // Connect immediately without waiting for load event or touching cross-origin contentDocument
-    void initBridge()
+    bridge.oninitialized = () => {
+      if (disposed) return
+      isInitializedRef.current = true
+      bridge.sendToolInput({ arguments: call?.arguments ?? {} })
+        .then(() => {
+          if (call?.result) {
+            const resPayload = (typeof call.result === 'object' && call.result !== null)
+              ? (call.result as Record<string, unknown>)
+              : { content: [{ type: 'text', text: String(call.result ?? '') }] }
+            void bridge.sendToolResult(resPayload as never)
+          }
+        })
+        .catch((err) => console.warn('mcp-apps: error sending tool input/result', err))
+    }
+
+    void bridge.connect(transport).catch(err => {
+      console.error('mcp-apps: bridge.connect failed', err)
+    })
+
+    // Assign srcDoc only once listener and bridge are ready
+    setActiveSrcDoc(htmlWithCsp)
 
     return () => {
       disposed = true
-      if (resetTimer) clearTimeout(resetTimer)
-      if (bridge) {
-        bridge.teardownResource({}).catch(() => void 0)
-      }
-      if (transport) {
-        void transport.close()
+      if (resetTimerRef.current) {
+        clearTimeout(resetTimerRef.current)
+        resetTimerRef.current = null
       }
     }
-  }, [call, resource, connection])
+  }, [sessionToken, resourceUri, htmlWithCsp])
 
-  // 3. Keep enclosing TurnProcess open for MCP Apps so interactive dashboard doesn't fold away
+  // Teardown resource only when the component unmounts
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
+      if (bridgeRef.current) {
+        bridgeRef.current.teardownResource({}).catch(() => void 0)
+        bridgeRef.current = null
+      }
+      if (transportRef.current) {
+        void transportRef.current.close()
+        transportRef.current = null
+      }
+    }
+  }, [])
+
+  // Send tool result if result arrives after initialization
+  useEffect(() => {
+    if (isInitializedRef.current && bridgeRef.current && call?.result) {
+      const resPayload = (typeof call.result === 'object' && call.result !== null)
+        ? (call.result as Record<string, unknown>)
+        : { content: [{ type: 'text', text: String(call.result ?? '') }] }
+      void bridgeRef.current.sendToolResult(resPayload as never)
+    }
+  }, [call?.result])
+
+  // Navigation tripwire: disallow navigation away from synthetic srcDoc
+  const handleIframeLoad = () => {
+    setNavCount(c => {
+      const next = c + 1
+      if (next > 1) {
+        setError('Navigation within MCP App iframe is disabled')
+        bridgeRef.current?.teardownResource({}).catch(() => void 0)
+      }
+      return next
+    })
+  }
+
+  // 3. Keep enclosing TurnProcess open for MCP Apps without touching outside elements
   useEffect(() => {
     if (!resource) return
     const iframe = iframeRef.current
@@ -284,44 +357,40 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
 
     let active = true
 
-    const revealTurnProcess = () => {
-      if (!active) return
+    const revealOwnAncestors = () => {
+      if (!active || !iframe) return
 
-      // Find any ancestor with hidden attribute (applied by DSH useSearchableHidden)
-      let el: HTMLElement | null = iframe
+      let el: HTMLElement | null = iframe.parentElement
       while (el && el !== document.body) {
         if (el.hasAttribute('hidden')) {
           el.dispatchEvent(new Event('beforematch'))
           el.removeAttribute('hidden')
         }
+        if (el.hasAttribute('data-turn-process')) {
+          const toggle = el.querySelector<HTMLButtonElement>('button[data-turn-process]:not([data-open])')
+          toggle?.click()
+        }
         el = el.parentElement
-      }
-
-      // Check for closed TurnProcess accordion buttons in the document
-      const closedButtons = document.querySelectorAll<HTMLButtonElement>('button[data-turn-process]:not([data-open])')
-      for (const btn of closedButtons) {
-        btn.click()
       }
     }
 
-    // Run reveal initially and at key turn-settlement intervals
-    revealTurnProcess()
-    const t1 = setTimeout(revealTurnProcess, 300)
-    const t2 = setTimeout(revealTurnProcess, 800)
-    const t3 = setTimeout(revealTurnProcess, 1500)
-    const t4 = setTimeout(revealTurnProcess, 2500)
+    revealOwnAncestors()
+    const t1 = setTimeout(revealOwnAncestors, 300)
+    const t2 = setTimeout(revealOwnAncestors, 800)
+    const t3 = setTimeout(revealOwnAncestors, 1500)
+    const t4 = setTimeout(revealOwnAncestors, 2500)
 
-    // Stop auto-expansion after 3.5s so we don't fight intentional user collapse later
     const tStop = setTimeout(() => {
       active = false
       observer.disconnect()
     }, 3500)
 
     const observer = new MutationObserver(() => {
-      revealTurnProcess()
+      revealOwnAncestors()
     })
 
-    observer.observe(document.body, {
+    const targetToObserve = iframe.closest?.('[data-turn-process]') ?? iframe.parentElement ?? document.body
+    observer.observe(targetToObserve, {
       attributes: true,
       attributeFilter: ['hidden', 'data-open', 'aria-expanded'],
       subtree: true,
@@ -362,7 +431,6 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
     )
   }
 
-  const htmlWithCsp = withContentSecurityPolicy(resource.html, resource.csp, resource.permissions)
   const allowAttr = typeof buildAllowAttribute === 'function' ? buildAllowAttribute(resource.permissions) : undefined
 
   return (
@@ -412,7 +480,8 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
           title={`${tool.rawName} MCP App`}
           sandbox="allow-scripts allow-forms allow-downloads"
           allow={allowAttr || undefined}
-          srcDoc={htmlWithCsp}
+          srcDoc={activeSrcDoc ?? undefined}
+          onLoad={handleIframeLoad}
           style={{
             display: 'block',
             width: '100%',
@@ -450,7 +519,6 @@ function resolveSettledAppCall(block: McpAppToolViewProps['block'], tool: UiTool
       args = JSON.parse(raw) as Record<string, unknown>
     }
   } catch {
-    // Malformed JSON args
   }
 
   return {

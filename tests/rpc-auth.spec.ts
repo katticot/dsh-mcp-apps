@@ -88,7 +88,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
 
     apply(mockCtx as any, config)
 
-    // Sync tools for 'analytics' server
     toolManager.syncServerTools('analytics', mockClient as any, tools, config.servers.analytics)
   })
 
@@ -127,7 +126,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     const sessionToken = execResult._sessionToken
     expect(sessionToken).toBeDefined()
 
-    // Manually expire the session in the store
     const store = (toolManager as any).sessionStore
     const session = store.get(sessionToken)
     session.expiresAt = Date.now() - 1000
@@ -151,7 +149,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     const execResult = await chartDef.execute({}, { agent: { id: 'agent-1' }, callId: 'c-1' })
     const sessionToken = execResult._sessionToken
 
-    // Try calling internal_eval which is model-only
     const res = await rpcHandler('tools/call', {
       sessionToken,
       name: 'internal_eval',
@@ -171,7 +168,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     const execResult = await chartDef.execute({}, { agent: { id: 'agent-1' }, callId: 'c-1' })
     const sessionToken = execResult._sessionToken
 
-    // Pass server parameter pointing to a different server
     const res = await rpcHandler('tools/call', {
       sessionToken,
       server: 'other_server',
@@ -267,7 +263,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     const execResult = await chartDef.execute({}, { agent: { id: 'agent-sec' }, callId: 'c-sec-1' })
     const sessionToken = execResult._sessionToken
 
-    // Call write_db which requires approval
     const res = await secureRpcHandler('tools/call', {
       sessionToken,
       name: 'write_db',
@@ -287,7 +282,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       },
     })
 
-    // If approval returns 'rejected', tool call should be rejected
     mockApproval.request.mockResolvedValueOnce('rejected')
     const rejectedRes = await secureRpcHandler('tools/call', {
       sessionToken,
@@ -296,7 +290,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     expect(rejectedRes.ok).toBe(false)
     expect(rejectedRes.error.code).toBe('forbidden')
 
-    // If approval returns 'unavailable', return error with code 'unavailable'
     mockApproval.request.mockResolvedValueOnce('unavailable')
     const unavailRes = await secureRpcHandler('tools/call', {
       sessionToken,
@@ -310,7 +303,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       },
     })
 
-    // If approval returns 'cancelled', return error with code 'cancelled'
     mockApproval.request.mockResolvedValueOnce('cancelled')
     const cancelledRes = await secureRpcHandler('tools/call', {
       sessionToken,
@@ -324,7 +316,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       },
     })
 
-    // If approval request throws, fail closed with 'unavailable'
     mockApproval.request.mockRejectedValueOnce(new Error('Prompt dismissed'))
     const thrownRes = await secureRpcHandler('tools/call', {
       sessionToken,
@@ -338,7 +329,6 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       },
     })
 
-    // If agent is idle (status !== 'running'), fail closed before requesting approval
     mockAgents.get.mockReturnValueOnce({ id: 'agent-sec', status: 'idle' })
     const idleRes = await secureRpcHandler('tools/call', {
       sessionToken,
@@ -351,7 +341,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
         message: 'Cannot request approval while agent "agent-sec" is idle',
       },
     })
-    expect(mockApproval.request).not.toHaveBeenCalledTimes(6) // not called for the idle attempt
+    expect(mockApproval.request).not.toHaveBeenCalledTimes(6)
   })
 
   it('handles approve mode when approval or agents service is missing or agent is disposed', async () => {

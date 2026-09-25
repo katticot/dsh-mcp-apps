@@ -11,6 +11,9 @@ export const inject = ['tools', 'connection']
 export { Config }
 
 declare module '@deepseek-ai/cordis' {
+  interface Events {
+    'ui-tools/changed': () => void
+  }
   interface Context {
     tools: ToolsService
     connection: {
@@ -24,7 +27,19 @@ declare module '@deepseek-ai/cordis' {
 
 export function apply(ctx: Context, config: Config) {
   const sessionStore = new AppSessionStore()
-  const toolManager = new ServerToolManager(ctx.tools, sessionStore)
+  const notifyUiToolsChanged = () => {
+    try {
+      ctx.emit('ui-tools/changed')
+    } catch {
+      // Ignored
+    }
+    try {
+      ;(ctx.connection as any).broadcast?.('ui-tools/changed')
+    } catch {
+      // Ignored
+    }
+  }
+  const toolManager = new ServerToolManager(ctx.tools, sessionStore, notifyUiToolsChanged)
   const pool = new ServerPool(ctx, config, toolManager)
 
   // Single coordinated effect: manages RPC routing, server lifecycle, and in-flight draining
@@ -119,13 +134,13 @@ export function apply(ctx: Context, config: Config) {
                     reason: `MCP App requested execution of tool "${toolName}"`,
                     signal,
                   })
-                  if (outcome === 'allowed-once') {
-                    // Approved, proceed
-                  } else if (outcome === 'unavailable') {
-                    return { ok: false, error: { code: 'unavailable', message: `Approval service is unavailable for tool "${toolName}"` } }
-                  } else if (outcome === 'cancelled') {
-                    return { ok: false, error: { code: 'cancelled', message: `Approval request for tool "${toolName}" was cancelled` } }
-                  } else {
+                  if (outcome !== 'allowed-once') {
+                    if (outcome === 'unavailable') {
+                      return { ok: false, error: { code: 'unavailable', message: `Approval service is unavailable for tool "${toolName}"` } }
+                    }
+                    if (outcome === 'cancelled') {
+                      return { ok: false, error: { code: 'cancelled', message: `Approval request for tool "${toolName}" was cancelled` } }
+                    }
                     return { ok: false, error: { code: 'forbidden', message: `Tool call "${toolName}" was rejected by approval policy (${outcome})` } }
                   }
                 } catch (err) {
@@ -163,19 +178,15 @@ export function apply(ctx: Context, config: Config) {
       }
     }, { authority: 'trusted-host' })
 
-    // Start all servers in background
     void pool.startAll()
 
-    // Disposer runs on plugin unload / HMR
     return async () => {
       isDraining = true
       unregisterRpc()
 
-      // Grace period: allow active in-flight calls to drain (up to 2000ms)
       const drainTimer = new Promise(resolve => setTimeout(resolve, 2000))
       await Promise.race([Promise.allSettled(Array.from(inFlight)), drainTimer])
 
-      // Clean up server pool and all tool registrations
       await pool.stopAll()
       toolManager.disposeAll()
       sessionStore.dispose()

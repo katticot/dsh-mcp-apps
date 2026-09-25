@@ -47,9 +47,12 @@ export class ServerToolManager {
   private fingerprints = new Map<string, Map<string, string>>()
   private uiTools = new Map<string, UiToolDescriptor>()
 
-  constructor(toolsService: ToolsService, sessionStore: AppSessionStore) {
+  private onUiToolsChanged?: () => void
+
+  constructor(toolsService: ToolsService, sessionStore: AppSessionStore, onUiToolsChanged?: () => void) {
     this.toolsService = toolsService
     this.sessionStore = sessionStore
+    this.onUiToolsChanged = onUiToolsChanged
   }
 
   syncServerTools(serverName: string, client: Client, tools: Tool[], serverConfig?: ServerConfig): void {
@@ -131,7 +134,6 @@ export class ServerToolManager {
             existingServerDisposers.delete(publicName)
           }
 
-          // Create DSH ToolDefinition
           const definition = {
             name: publicName,
             description: tool.description ?? '',
@@ -232,6 +234,7 @@ export class ServerToolManager {
 
       this.disposers.set(serverName, nextServerDisposers)
       this.fingerprints.set(serverName, nextServerFingerprints)
+      this.onUiToolsChanged?.()
     }
   }
 
@@ -253,6 +256,7 @@ export class ServerToolManager {
         this.uiTools.delete(pubName)
       }
     }
+    this.onUiToolsChanged?.()
   }
 
   disposeAll(): void {
