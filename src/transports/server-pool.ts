@@ -331,15 +331,34 @@ export class ServerPool {
     const delay = Math.min(initial * Math.pow(factor, attempts), maxDelay)
 
     this.reconnectAttempts.set(serverName, attempts + 1)
+
+    // Avoid double reconnects: drop any timer already pending for this
+    // server before scheduling the new one.
+    const existingTimer = this.reconnectTimers.get(serverName)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+    }
+
     const timer = setTimeout(async () => {
-      try {
-        if (!this.lifecycleController.signal.aborted) {
+      this.reconnectTimers.delete(serverName)
+
+      if (this.lifecycleController.signal.aborted) return
+      // A startServer() for this name is already running (e.g. from a
+      // prior reconnect or the initial startAll); don't start a second one.
+      if (this.startupTasks.has(serverName)) return
+
+      const task = (async () => {
+        try {
           await this.startServer(serverName, serverConfig, this.lifecycleController.signal)
           this.reconnectAttempts.delete(serverName)
+        } catch (err) {
+          console.error(`mcp-apps: reconnect attempt failed for "${serverName}":`, err)
+        } finally {
+          this.startupTasks.delete(serverName)
         }
-      } catch (err) {
-        console.error(`mcp-apps: reconnect attempt failed for "${serverName}":`, err)
-      }
+      })()
+      this.startupTasks.set(serverName, task)
+      await task
     }, delay)
     this.reconnectTimers.set(serverName, timer)
   }
