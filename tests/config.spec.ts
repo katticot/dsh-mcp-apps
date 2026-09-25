@@ -167,6 +167,7 @@ describe('Config Schema Validation', () => {
       },
     }
 
+    // @ts-expect-error - intentionally invalid input (null server entry); asserting runtime rejection
     expect(() => Config(raw)).toThrow()
   })
 
