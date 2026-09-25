@@ -1,8 +1,9 @@
 import crypto from 'node:crypto'
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
-import { getToolUiResourceUri } from '@modelcontextprotocol/ext-apps/app-bridge'
+import { getToolUiResourceUri, isToolVisibilityModelOnly } from '@modelcontextprotocol/ext-apps/app-bridge'
 import type { AppSessionStore } from './session-store'
+import type { ServerConfig } from './config'
 
 const MAX_PUBLIC_NAME_LENGTH = 64
 const INVALID_NAME_CHARS = /[^A-Za-z0-9_-]/g
@@ -41,10 +42,12 @@ export class ServerToolManager {
     this.sessionStore = sessionStore
   }
 
-  syncServerTools(serverName: string, client: Client, tools: Tool[]): void {
+  syncServerTools(serverName: string, client: Client, tools: Tool[], serverConfig?: ServerConfig): void {
     const existingServerDisposers = this.disposers.get(serverName) ?? new Map<string, () => void>()
     const nextServerDisposers = new Map<string, () => void>()
-    const allServerToolNames = tools.map(t => t.name)
+    const allowedReverseTools = serverConfig?.allowAppToolCalls === true
+      ? new Set(tools.filter(t => !isToolVisibilityModelOnly(t)).map(t => t.name))
+      : new Set<string>()
 
     for (const tool of tools) {
       const publicName = publicToolName(serverName, tool.name)
@@ -80,6 +83,7 @@ export class ServerToolManager {
             properties: {
               content: { type: 'array', items: {} },
               structuredContent: {},
+              _sessionToken: { type: 'string' },
             },
             required: ['content'],
             additionalProperties: false,
@@ -90,19 +94,25 @@ export class ServerToolManager {
           }],
           presentationMeta: (_args: unknown, value: unknown) => {
             if (!resourceUri) return {}
-            const session = this.sessionStore.createSession(serverName, tool.name, resourceUri, allServerToolNames)
+            let sessionToken: string | undefined
+            let cleanResult = value
+            if (typeof value === 'object' && value !== null) {
+              const { _sessionToken, ...rest } = value as Record<string, unknown>
+              sessionToken = typeof _sessionToken === 'string' ? _sessionToken : undefined
+              cleanResult = rest
+            }
             return {
               mcpApp: {
                 serverName,
                 rawToolName: tool.name,
                 resourceUri,
-                sessionToken: session.sessionToken,
-                result: value,
+                sessionToken,
+                result: cleanResult,
               },
             }
           },
         },
-        async execute(args: unknown) {
+        execute: async (args: unknown, exec?: { agent?: { id?: string }; rootCallId?: string; callId?: string }) => {
           const argumentsValue = typeof args === 'object' && args !== null && !Array.isArray(args) ? args : {}
           const result = await client.callTool({
             name: tool.name,
@@ -111,9 +121,24 @@ export class ServerToolManager {
           if (result.isError) {
             throw new Error(extractText(result.content, tool.name) || `Tool "${tool.name}" failed`)
           }
+          let sessionToken: string | undefined
+          if (resourceUri) {
+            const session = this.sessionStore.createSession(
+              serverName,
+              tool.name,
+              resourceUri,
+              allowedReverseTools,
+              {
+                agentId: exec?.agent?.id,
+                callId: exec?.rootCallId ?? exec?.callId,
+              }
+            )
+            sessionToken = session.sessionToken
+          }
           return {
             content: result.content,
-            ...result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {},
+            ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+            ...(sessionToken ? { _sessionToken: sessionToken } : {}),
           }
         },
       }

@@ -39,16 +39,39 @@ describe('Config Schema Validation', () => {
     expect(parsed.servers.powerhive.transport).toBe('stdio')
     expect(parsed.servers.powerhive.command).toBe('go')
     expect(parsed.servers.powerhive.toolCallTimeoutMs).toBe(30000)
+    expect(parsed.servers.powerhive.allowAppToolCalls).toBe(false)
 
     expect(parsed.servers.cloudMcp.transport).toBe('sse')
     expect(parsed.servers.cloudMcp.url).toBe('https://mcp.example.com/sse')
+    expect(parsed.servers.cloudMcp.allowAppToolCalls).toBe(false)
 
     expect(parsed.servers.streamMcp.transport).toBe('streamable-http')
     expect(parsed.servers.wsMcp.transport).toBe('websocket')
     expect(parsed.servers.wsMcp.reconnectOptions?.maxRetries).toBe(10)
+    expect(parsed.servers.wsMcp.allowAppToolCalls).toBe(false)
 
     expect(parsed.servers.localIpc.transport).toBe('ipc')
     expect(parsed.servers.localIpc.socketPath).toBe('/tmp/mcp.sock')
+    expect(parsed.servers.localIpc.allowAppToolCalls).toBe(false)
+  })
+
+  it('allows enabling allowAppToolCalls per server', () => {
+    const raw = {
+      servers: {
+        trusted: {
+          command: 'python3',
+          allowAppToolCalls: true,
+        },
+        untrusted: {
+          command: 'node',
+          allowAppToolCalls: false,
+        },
+      },
+    }
+
+    const parsed = Config(raw)
+    expect(parsed.servers.trusted.allowAppToolCalls).toBe(true)
+    expect(parsed.servers.untrusted.allowAppToolCalls).toBe(false)
   })
 
   it('defaults stdio transport when omitted', () => {

@@ -112,7 +112,8 @@ export class ServerPool {
 
   private async refreshTools(serverName: string, client: Client): Promise<void> {
     const toolsResult = await client.listTools()
-    this.toolManager.syncServerTools(serverName, client, toolsResult.tools)
+    const serverConfig = this.config.servers[serverName]
+    this.toolManager.syncServerTools(serverName, client, toolsResult.tools, serverConfig)
   }
 
   getUiToolsSnapshot(): UiToolDescriptor[] {
