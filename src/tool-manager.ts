@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
-import { getToolUiResourceUri, isToolVisibilityModelOnly } from '@modelcontextprotocol/ext-apps/app-bridge'
+import { getToolUiResourceUri, isToolVisibilityModelOnly, isToolVisibilityAppOnly } from '@modelcontextprotocol/ext-apps/app-bridge'
 import type { AppSessionStore } from './session-store'
 import type { ServerConfig } from './config'
 
@@ -45,7 +45,8 @@ export class ServerToolManager {
   syncServerTools(serverName: string, client: Client, tools: Tool[], serverConfig?: ServerConfig): void {
     const existingServerDisposers = this.disposers.get(serverName) ?? new Map<string, () => void>()
     const nextServerDisposers = new Map<string, () => void>()
-    const allowedReverseTools = serverConfig?.allowAppToolCalls === true
+    const isAllowed = serverConfig?.allowAppToolCalls === true || serverConfig?.allowAppToolCalls === 'allow' || serverConfig?.allowAppToolCalls === 'approve'
+    const allowedReverseTools = isAllowed
       ? new Set(tools.filter(t => !isToolVisibilityModelOnly(t)).map(t => t.name))
       : new Set<string>()
 
@@ -62,6 +63,11 @@ export class ServerToolManager {
         })
       } else {
         this.uiTools.delete(publicName)
+      }
+
+      // App-only tools must not be registered with the LLM in ctx.tools
+      if (isToolVisibilityAppOnly(tool)) {
+        continue
       }
 
       // If tool was already registered, retain its existing disposer unless updated

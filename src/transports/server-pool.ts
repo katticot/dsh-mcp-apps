@@ -122,8 +122,7 @@ export class ServerPool {
 
   findServerForTool(toolName: string): string | undefined {
     const snapshot = this.getUiToolsSnapshot()
-    // @ts-expect-error PR 2 fixes this
-    const foundUi = snapshot.find(t => t.tool.name === toolName || t.publicName === toolName)
+    const foundUi = snapshot.find(t => t.rawName === toolName || t.publicName === toolName)
     if (foundUi?.serverName) return foundUi.serverName
 
     for (const [name] of this.servers.entries()) {

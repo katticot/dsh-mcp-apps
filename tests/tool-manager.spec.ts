@@ -211,4 +211,49 @@ describe('ServerToolManager', () => {
     })
     expect((meta.mcpApp.result as any)._sessionToken).toBeUndefined()
   })
+
+  it('does not register app-only tools with ctx.tools for the LLM', () => {
+    const registered: any[] = []
+    const mockToolsService = {
+      register: vi.fn((def: any) => {
+        registered.push(def)
+        return vi.fn()
+      }),
+    }
+
+    const sessionStore = new AppSessionStore()
+    const manager = new ServerToolManager(mockToolsService, sessionStore)
+    const mockClient = {} as unknown as Parameters<ServerToolManager['syncServerTools']>[1]
+
+    const tools: Tool[] = [
+      {
+        name: 'app_secret_button',
+        description: 'Only UI can call',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { visibility: ['app'] } },
+      },
+      {
+        name: 'model_and_app_tool',
+        description: 'Both can use',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { visibility: ['model', 'app'] } },
+      },
+      {
+        name: 'regular_tool',
+        description: 'Default visibility',
+        inputSchema: { type: 'object' },
+      },
+    ]
+
+    manager.syncServerTools('test-srv', mockClient, tools, {
+      transport: 'stdio',
+      command: 'srv',
+      allowAppToolCalls: true,
+    })
+
+    const registeredNames = registered.map(r => r.name)
+    expect(registeredNames).toContain('mcp__test-srv__model_and_app_tool')
+    expect(registeredNames).toContain('mcp__test-srv__regular_tool')
+    expect(registeredNames).not.toContain('mcp__test-srv__app_secret_button')
+  })
 })
