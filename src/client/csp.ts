@@ -104,10 +104,18 @@ export function withContentSecurityPolicy(
     return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML
   }
 
-  if (/<head(?:\s[^>]*)?>/i.test(html)) {
-    return html.replace(/(<head(?:\s[^>]*)?>)/i, `$1${metaTag}`)
+  // No DOMParser available (e.g. non-browser environment): don't attempt to
+  // locate <head> with a regex, since it can be defeated by content that
+  // merely looks like a head tag (comments, attribute values, etc). The
+  // HTML parser hoists a leading <meta> into <head> before any script can
+  // run, so prepending it at the very start of the document is sufficient
+  // and cannot be bypassed by anything appearing later in the markup.
+  const doctypeMatch = html.match(/^\s*<!doctype[^>]*>/i)
+  if (doctypeMatch) {
+    const [doctype] = doctypeMatch
+    return html.slice(0, doctype.length) + metaTag + html.slice(doctype.length)
   }
-  return `<head>${metaTag}</head>${html}`
+  return metaTag + html
 }
 
 function escapeAttribute(value: string): string {
