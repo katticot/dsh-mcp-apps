@@ -81,4 +81,39 @@ describe('ServerPool Lifecycle', () => {
     expect(startSpy).toHaveBeenCalledTimes(1)
     vi.useRealTimers()
   })
+
+  it('readResource extracts HTML from multi-content response', async () => {
+    const mockClient = {
+      readResource: vi.fn().mockResolvedValue({
+        contents: [
+          { uri: 'ui://srv/metadata', text: '{"version": 1}' },
+          { uri: 'ui://srv/app', text: '<div>App Content</div>', mimeType: 'text/html' },
+        ],
+      }),
+    }
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd' } },
+    }, { getUiToolsSnapshot: () => [{ resourceUri: 'ui://srv/app', serverName: 'srv' }] } as any)
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport: vi.fn() })
+
+    const res = await pool.readResource('srv', 'ui://srv/app')
+    expect(res.html).toBe('<div>App Content</div>')
+  })
+
+  it('readResourceRaw returns raw ReadResourceResult unchanged', async () => {
+    const rawResult = {
+      contents: [
+        { uri: 'resource://1', text: 'one' },
+        { uri: 'resource://2', blob: 'dHdv' },
+      ],
+    }
+    const mockClient = { readResource: vi.fn().mockResolvedValue(rawResult) }
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd' } },
+    }, { getUiToolsSnapshot: () => [] } as any)
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport: vi.fn() })
+
+    const res = await pool.readResourceRaw('srv', 'resource://1')
+    expect(res).toBe(rawResult)
+  })
 })

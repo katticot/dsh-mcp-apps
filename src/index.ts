@@ -67,6 +67,16 @@ export function apply(ctx: Context, config: Config) {
               return { ok: true, value: resource }
             }
 
+            case 'resources/read-raw': {
+              const uri = typeof params.uri === 'string' ? params.uri : undefined
+              const server = typeof params.server === 'string' ? params.server : undefined
+              if (!uri) {
+                return { ok: false, error: { code: 'bad-request', message: 'Missing uri parameter' } }
+              }
+              const raw = await pool.readResourceRaw(server, uri, signal)
+              return { ok: true, value: raw }
+            }
+
             case 'tools/call': {
               const sessionToken = typeof params.sessionToken === 'string' ? params.sessionToken : undefined
               if (!sessionToken) {
