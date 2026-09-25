@@ -1,16 +1,27 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './config'
 import { AppSessionStore } from './session-store'
-import { ServerToolManager } from './tool-manager'
+import { ServerToolManager, type ToolsService } from './tool-manager'
 import { ServerPool } from './transports/server-pool'
 
 export const name = 'mcp-apps'
 export const inject = ['tools', 'webServer', 'connection', 'subprocess']
 export { Config }
 
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    tools: ToolsService
+    connection: {
+      register?: (ctx: Context, path: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>, options?: unknown) => () => void
+      rpc: {
+        handle: (ctx: Context, path: string, handler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>, options?: unknown) => () => void
+      }
+    }
+  }
+}
+
 export function apply(ctx: Context, config: Config) {
   const sessionStore = new AppSessionStore()
-  // @ts-expect-error ctx.tools conforms to ToolsService
   const toolManager = new ServerToolManager(ctx.tools, sessionStore)
   const pool = new ServerPool(ctx, config, toolManager)
 

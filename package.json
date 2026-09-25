@@ -54,12 +54,13 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "build": "tsdown",
     "test": "vitest run",
-    "prepublishOnly": "pnpm test && pnpm build"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",

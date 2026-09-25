@@ -10,7 +10,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
   let unloadPlugin: () => Promise<void>
   let toolManager: ServerToolManager
   let registeredToolDefs: any[]
-  let callToolSpy: ReturnType<typeof vi.spyOn>
+  let callToolSpy: any
 
   const config: Config = {
     servers: {
