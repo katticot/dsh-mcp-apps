@@ -3,7 +3,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import { getToolUiResourceUri, isToolVisibilityModelOnly, isToolVisibilityAppOnly } from '@modelcontextprotocol/ext-apps/app-bridge'
 import type { AppSessionStore } from './session-store'
-import type { ServerConfig } from './config'
+import { resolveToolCallTimeoutMs, type ServerConfig } from './config'
 
 const MAX_PUBLIC_NAME_LENGTH = 64
 const INVALID_NAME_CHARS = /[^A-Za-z0-9_-]/g
@@ -48,11 +48,18 @@ export class ServerToolManager {
   private uiTools = new Map<string, UiToolDescriptor>()
 
   private onUiToolsChanged?: () => void
+  private defaultTimeoutMs?: number
 
-  constructor(toolsService: ToolsService, sessionStore: AppSessionStore, onUiToolsChanged?: () => void) {
+  constructor(
+    toolsService: ToolsService,
+    sessionStore: AppSessionStore,
+    onUiToolsChanged?: () => void,
+    defaultTimeoutMs?: number
+  ) {
     this.toolsService = toolsService
     this.sessionStore = sessionStore
     this.onUiToolsChanged = onUiToolsChanged
+    this.defaultTimeoutMs = defaultTimeoutMs
   }
 
   syncServerTools(serverName: string, client: Client, tools: Tool[], serverConfig?: ServerConfig): void {
@@ -175,10 +182,11 @@ export class ServerToolManager {
             },
             execute: async (args: unknown, exec?: { agent?: { id?: string }; rootCallId?: string; callId?: string; signal?: AbortSignal }) => {
               const argumentsValue = typeof args === 'object' && args !== null && !Array.isArray(args) ? args : {}
+              const timeout = resolveToolCallTimeoutMs(serverConfig, this.defaultTimeoutMs)
               const result = await client.callTool({
                 name: tool.name,
                 arguments: argumentsValue as Record<string, unknown>,
-              }, undefined, { signal: exec?.signal })
+              }, undefined, { signal: exec?.signal, timeout })
               if (result.isError) {
                 throw new Error(extractText(result.content, tool.name) || `Tool "${tool.name}" failed`)
               }

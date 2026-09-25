@@ -211,6 +211,54 @@ describe('ServerToolManager', () => {
     expect((meta.mcpApp.result as any)._sessionToken).toBeUndefined()
   })
 
+  it('passes signal and resolved timeout to client.callTool on the main execute path', async () => {
+    const registered: any[] = []
+    const mockToolsService = {
+      register: vi.fn((def: any) => {
+        registered.push(def)
+        return vi.fn()
+      }),
+    }
+
+    const sessionStore = new AppSessionStore()
+    const manager = new ServerToolManager(mockToolsService, sessionStore, undefined, 9000)
+    const mockClient = {
+      callTool: vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] }),
+    } as unknown as Parameters<ServerToolManager['syncServerTools']>[1]
+
+    const tools: Tool[] = [
+      { name: 'no_override_tool', inputSchema: { type: 'object' } },
+      { name: 'with_override_tool', inputSchema: { type: 'object' } },
+    ]
+
+    manager.syncServerTools('analytics', mockClient, tools, {
+      transport: 'stdio',
+      command: 'analytics-srv',
+    })
+    manager.syncServerTools('other', mockClient, [tools[1]], {
+      transport: 'stdio',
+      command: 'other-srv',
+      toolCallTimeoutMs: 5000,
+    })
+
+    const controller = new AbortController()
+    const noOverrideDef = registered.find(d => d.name === 'mcp__analytics__no_override_tool')
+    await noOverrideDef.execute({}, { signal: controller.signal })
+    expect(mockClient.callTool).toHaveBeenLastCalledWith(
+      { name: 'no_override_tool', arguments: {} },
+      undefined,
+      { signal: controller.signal, timeout: 9000 }
+    )
+
+    const overrideDef = registered.find(d => d.name === 'mcp__other__with_override_tool')
+    await overrideDef.execute({}, { signal: controller.signal })
+    expect(mockClient.callTool).toHaveBeenLastCalledWith(
+      { name: 'with_override_tool', arguments: {} },
+      undefined,
+      { signal: controller.signal, timeout: 5000 }
+    )
+  })
+
   it('does not register app-only tools with ctx.tools for the LLM', () => {
     const registered: any[] = []
     const mockToolsService = {

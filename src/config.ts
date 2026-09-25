@@ -96,6 +96,22 @@ const IpcSchema: Schema<IpcServerConfig> = Schema.object({
   allowedPermissions: Schema.array(String).default([]),
 })
 
+export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 30000
+
+/**
+ * Resolves the effective tool-call timeout for a server: the server's own
+ * override, falling back to the plugin-wide default, falling back to the
+ * hard-coded default. Shared by every call site (forward tool execution,
+ * app-initiated reverse tool calls, and resource reads) so the resolution
+ * order never drifts between them.
+ */
+export function resolveToolCallTimeoutMs(
+  serverConfig?: Pick<ServerConfig, 'toolCallTimeoutMs'>,
+  defaultTimeoutMs?: number
+): number {
+  return serverConfig?.toolCallTimeoutMs ?? defaultTimeoutMs ?? DEFAULT_TOOL_CALL_TIMEOUT_MS
+}
+
 export const SERVER_NAME_REGEX = /^(?!.*__)(?!.*_$)[a-zA-Z0-9_-]+$/
 
 const ServerNameSchema = Schema.string()
