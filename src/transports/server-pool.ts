@@ -240,6 +240,9 @@ export class ServerPool {
   }
 
   async stopAll(): Promise<void> {
+    this.lifecycleController.abort()
+    await Promise.allSettled(Array.from(this.startupTasks.values()))
+
     for (const [name, instance] of this.servers.entries()) {
       try {
         await instance.client.close().catch(() => void 0)
