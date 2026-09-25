@@ -6,7 +6,10 @@ import { expandEnvVars, type RemoteServerConfig } from '../config'
 
 export function createRemoteTransport(config: RemoteServerConfig): Transport {
   const url = new URL(config.url)
-  const isLoopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1'
+  // URL.hostname keeps the brackets around an IPv6 literal (e.g. "[::1]");
+  // strip them so bare-host comparisons work.
+  const hostname = url.hostname.replace(/^\[|\]$/g, '')
+  const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
 
   if (url.protocol === 'http:' && !isLoopback) {
     throw new Error(`Insecure transport: http:// is forbidden except on loopback (${url.hostname})`)

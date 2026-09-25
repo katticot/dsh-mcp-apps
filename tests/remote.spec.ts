@@ -17,6 +17,30 @@ describe('Remote Transport Security', () => {
       transport: 'streamable-http',
       url: 'http://127.0.0.1:8080/mcp',
     })).not.toThrow()
+
+    expect(() => createRemoteTransport({
+      transport: 'streamable-http',
+      url: 'http://[::1]:8080/mcp',
+    })).not.toThrow()
+
+    expect(() => createRemoteTransport({
+      transport: 'streamable-http',
+      url: 'http://[::2]:8080/mcp',
+    })).toThrow(/http:\/\/ is forbidden except on loopback/i)
+  })
+
+  it('rejects hosts that merely contain a loopback name as a substring', () => {
+    for (const url of [
+      'http://127.0.0.1.evil.com/mcp',
+      'http://localhost.evil.com/mcp',
+      'http://evil.com/?localhost',
+      'http://localhost@evil.com/mcp',
+    ]) {
+      expect(() => createRemoteTransport({
+        transport: 'streamable-http',
+        url,
+      })).toThrow(/http:\/\/ is forbidden except on loopback/i)
+    }
   })
 
   it('throws when headers are provided for websocket transport', () => {
