@@ -39,7 +39,7 @@ export function apply(ctx: Context, config: Config) {
       // Ignored
     }
   }
-  const toolManager = new ServerToolManager(ctx.tools, sessionStore, notifyUiToolsChanged)
+  const toolManager = new ServerToolManager(ctx.tools, sessionStore, notifyUiToolsChanged, config.defaultTimeoutMs)
   const pool = new ServerPool(ctx, config, toolManager)
 
   // Single coordinated effect: manages RPC routing, server lifecycle, and in-flight draining

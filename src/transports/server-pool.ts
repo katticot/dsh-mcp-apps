@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/app-bridge'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Config, ServerConfig } from '../config'
+import { resolveToolCallTimeoutMs, type Config, type ServerConfig } from '../config'
 import type { ServerToolManager, UiToolDescriptor } from '../tool-manager'
 import { createStdioTransport, type ManagedStdio } from './subprocess'
 import { createRemoteTransport } from './remote'
@@ -206,7 +206,7 @@ export class ServerPool {
     }
 
     const serverConfig = this.config.servers[targetServer]
-    const timeout = serverConfig?.toolCallTimeoutMs ?? this.config.defaultTimeoutMs ?? 30000
+    const timeout = resolveToolCallTimeoutMs(serverConfig, this.config.defaultTimeoutMs)
     return instance.client.readResource({ uri }, { timeout, signal })
   }
 
@@ -230,7 +230,7 @@ export class ServerPool {
     }
 
     const serverConfig = this.config.servers[targetServer]
-    const timeout = serverConfig?.toolCallTimeoutMs ?? this.config.defaultTimeoutMs ?? 30000
+    const timeout = resolveToolCallTimeoutMs(serverConfig, this.config.defaultTimeoutMs)
     const response = await instance.client.readResource({ uri }, { timeout, signal })
     if (!response.contents || response.contents.length === 0) {
       throw new Error(`Resource ${uri} returned invalid content items`)
@@ -294,7 +294,7 @@ export class ServerPool {
       throw new Error(`MCP server "${serverName}" is not connected`)
     }
     const serverConfig = this.config.servers[serverName]
-    const timeout = serverConfig?.toolCallTimeoutMs ?? this.config.defaultTimeoutMs ?? 30000
+    const timeout = resolveToolCallTimeoutMs(serverConfig, this.config.defaultTimeoutMs)
     return instance.client.callTool(
       {
         name,
