@@ -30,8 +30,10 @@ MCP servers can return more than text: the [MCP Apps](https://github.com/modelco
 ## Requirements
 
 - Node.js >= 22
-- [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness)
+- [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness) `0.1.5-rc.3` with Cordis `4.0.2`
 - The **web** profile. The plugin's client bundle is injected only when `dsh.client.platform` is `web` (see `package.json`), so its UI does not render in other profiles (e.g. `tui`, `headless`) even if the plugin is installed there.
+
+The DSH release above is the plugin's pinned compatibility candidate. Other DSH/Cordis combinations are not currently claimed as supported; see [the compatibility record](docs/dsh-compatibility.md) for the package and API contract and remaining runtime validation.
 
 ## Install
 
