@@ -49,12 +49,23 @@ interface ResourceData {
 }
 
 /**
+ * The minimal surface `ResilientPostMessageTransport` needs from the iframe's
+ * `contentWindow` — just enough to send a message and to identify the sender
+ * of an incoming one. Narrower than `Window` so tests can pass a plain
+ * `{ postMessage }` stand-in without an unsafe cast (a real `Window` /
+ * `iframe.contentWindow` already satisfies this structurally).
+ */
+export interface MessageTargetWindow {
+  postMessage(message: unknown, targetOrigin: string): void
+}
+
+/**
  * Custom transport for AppBridge that attaches window.addEventListener('message')
  * immediately and buffers incoming messages from the target iframe until
  * bridge.connect() completes and onmessage is ready.
  */
-class ResilientPostMessageTransport {
-  private targetWindow: Window | null = null
+export class ResilientPostMessageTransport {
+  private targetWindow: MessageTargetWindow | null = null
   private messageListener: (event: MessageEvent) => void
   private earlyQueue: unknown[] = []
   private isStarted = false
@@ -64,7 +75,7 @@ class ResilientPostMessageTransport {
   public onclose?: () => void
   public sessionId?: string
 
-  constructor(targetWindow: Window | null) {
+  constructor(targetWindow: MessageTargetWindow | null) {
     this.targetWindow = targetWindow
 
     this.messageListener = (event: MessageEvent) => {
@@ -88,7 +99,7 @@ class ResilientPostMessageTransport {
     window.addEventListener('message', this.messageListener)
   }
 
-  setTarget(target: Window) {
+  setTarget(target: MessageTargetWindow) {
     this.targetWindow = target
   }
 
@@ -115,6 +126,105 @@ class ResilientPostMessageTransport {
     this.earlyQueue = []
     window.removeEventListener('message', this.messageListener)
     this.onclose?.()
+  }
+}
+
+export interface BridgeLifecycleOptions {
+  contentWindow: MessageTargetWindow
+  sessionToken: string
+  serverName?: string
+  hostInfo?: { name: string; version: string }
+  rpcCall: ClientConnectionRpc['rpc']['call']
+}
+
+export interface BridgeLifecycleHandle {
+  bridge: AppBridge
+  transport: ResilientPostMessageTransport
+  /**
+   * Fully disposes this bridge/transport: optionally notifies the view
+   * (`ui/resource-teardown`) first, then closes the transport (removing its
+   * `window` message listener) and the bridge (aborting in-flight requests,
+   * clearing timers). Idempotent — a second call is a no-op.
+   *
+   * Notifying the view (`notifyView: true`) MUST happen before the close,
+   * since closing tears down the underlying transport a request would need
+   * to send through. Only pass `true` once it's known the iframe will NOT
+   * be immediately reused by a fresh bridge (a genuine final unmount) —
+   * notifying a still-live, about-to-be-reused iframe races/corrupts the
+   * next session's handshake. Pass `false` for a React StrictMode dev-mode
+   * remount or any other supersession.
+   */
+  dispose(notifyView: boolean): void
+}
+
+/**
+ * Creates a transport + `AppBridge` pair wired to forward MCP calls through
+ * `rpcCall`, and connects it. Extracted from `McpAppToolView`'s bridge
+ * `useLayoutEffect` so the creation/disposal lifecycle — the part
+ * responsible for a past bug where a React StrictMode dev-mode remount
+ * (mount → cleanup → mount) left the first bridge instance undisposed while
+ * only its transport was closed — can be exercised directly in a test
+ * without needing a full DOM/React render.
+ */
+export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLifecycleHandle {
+  const { contentWindow, sessionToken, serverName, rpcCall } = options
+  const hostInfo = options.hostInfo ?? { name: 'DeepSeek Harness', version: __PKG_VERSION__ }
+
+  const transport = new ResilientPostMessageTransport(contentWindow)
+  const bridge = new AppBridge(null, hostInfo, {
+    serverTools: {},
+    serverResources: {},
+  })
+
+  bridge.oncalltool = async (params, extra) => {
+    const res = await rpcCall('/mcp-apps', 'tools/call', {
+      sessionToken,
+      server: serverName,
+      name: params.name,
+      arguments: params.arguments ?? {},
+    }, extra?.signal)
+    if (!res.ok) throw new Error(res.error.message)
+    return res.value as never
+  }
+
+  bridge.onlistresources = async (_params, extra) => {
+    const res = await rpcCall('/mcp-apps', 'resources/list', {
+      server: serverName,
+      sessionToken,
+    }, extra?.signal)
+    if (!res.ok) throw new Error(res.error.message)
+    return res.value as never
+  }
+
+  bridge.onreadresource = async (params, extra) => {
+    const res = await rpcCall('/mcp-apps', 'resources/read-raw', {
+      server: serverName,
+      uri: params.uri,
+      sessionToken,
+    }, extra?.signal)
+    if (!res.ok) throw new Error(res.error.message)
+    return res.value as never
+  }
+
+  void bridge.connect(transport).catch(err => {
+    console.error('mcp-apps: bridge.connect failed', err)
+  })
+
+  let disposed = false
+  return {
+    bridge,
+    transport,
+    dispose(notifyView: boolean) {
+      if (disposed) return
+      disposed = true
+      const run = async () => {
+        if (notifyView) {
+          await bridge.teardownResource({}).catch(() => void 0)
+        }
+        await bridge.close().catch(() => void 0)
+      }
+      void run()
+    },
   }
 }
 
@@ -189,7 +299,17 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
     return withContentSecurityPolicy(resource.html, resource.csp, resource.permissions)
   }, [resource])
 
-  // 2. Establish bridge and transport via useLayoutEffect, delaying srcDoc assignment until ready
+  // 2. Establish bridge and transport via useLayoutEffect, delaying srcDoc assignment until ready.
+  //
+  // Cleanup always fully disposes the bridge/transport THIS invocation created
+  // (closed over locally, never read back off the shared refs) so a React
+  // StrictMode dev-mode remount (mount -> cleanup -> mount) can't leave a
+  // stale bridge undisposed. Disposal itself never sends `ui/resource-teardown`
+  // to the view (that would race a reused iframe's next handshake) — that
+  // notification is deferred one macrotask so we can tell a StrictMode/
+  // dependency-change remount (a fresh bridge attaches to the refs before the
+  // timer fires) apart from a genuine final unmount (nothing does, so the
+  // timer proceeds and notifies the view before disposing for good).
   useLayoutEffect(() => {
     if (!sessionToken || !htmlWithCsp) return
     const iframe = iframeRef.current
@@ -198,55 +318,19 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
     const contentWindow = iframe.contentWindow
     if (!contentWindow) return
 
-    if (transportRef.current) {
-      void transportRef.current.close()
-    }
-
-    const transport = new ResilientPostMessageTransport(contentWindow)
-    transportRef.current = transport
-
-    const bridge = new AppBridge(null, {
-      name: 'DeepSeek Harness',
-      version: __PKG_VERSION__,
-    }, {
-      serverTools: {},
-      serverResources: {},
+    const handle = createBridgeLifecycle({
+      contentWindow,
+      sessionToken,
+      serverName,
+      rpcCall: (channel, endpoint, payload, signal) => connectionRef.current.rpc.call(channel, endpoint, payload, signal),
     })
+    const { bridge, transport } = handle
     bridgeRef.current = bridge
+    transportRef.current = transport
     isInitializedRef.current = false
 
     let lastHeight = 360
     let disposed = false
-
-    bridge.oncalltool = async (params, extra) => {
-      const res = await connectionRef.current.rpc.call('/mcp-apps', 'tools/call', {
-        sessionToken,
-        server: serverName,
-        name: params.name,
-        arguments: params.arguments ?? {},
-      }, extra?.signal)
-      if (!res.ok) throw new Error(res.error.message)
-      return res.value as never
-    }
-
-    bridge.onlistresources = async (_params, extra) => {
-      const res = await connectionRef.current.rpc.call('/mcp-apps', 'resources/list', {
-        server: serverName,
-        sessionToken,
-      }, extra?.signal)
-      if (!res.ok) throw new Error(res.error.message)
-      return res.value as never
-    }
-
-    bridge.onreadresource = async (params, extra) => {
-      const res = await connectionRef.current.rpc.call('/mcp-apps', 'resources/read-raw', {
-        server: serverName,
-        uri: params.uri,
-        sessionToken,
-      }, extra?.signal)
-      if (!res.ok) throw new Error(res.error.message)
-      return res.value as never
-    }
 
     // Sliding-window resize defense: 1000ms window, max 10 events, flushes final height on unlock
     bridge.onsizechange = (params) => {
@@ -298,10 +382,6 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
         .catch((err) => console.warn('mcp-apps: error sending tool input/result', err))
     }
 
-    void bridge.connect(transport).catch(err => {
-      console.error('mcp-apps: bridge.connect failed', err)
-    })
-
     // Assign srcDoc only once listener and bridge are ready
     setActiveSrcDoc(htmlWithCsp)
 
@@ -311,23 +391,29 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
         clearTimeout(resetTimerRef.current)
         resetTimerRef.current = null
       }
+
+      // Detach this bridge/transport pair from the shared refs immediately,
+      // so a subsequent (re)mount's effect body doesn't have to fight over
+      // ownership of them.
+      if (bridgeRef.current === bridge) bridgeRef.current = null
+      if (transportRef.current === transport) transportRef.current = null
+
+      // Defer the actual disposal by one macrotask so we can tell a
+      // StrictMode dev-mode remount (or a dependency change reusing the same
+      // iframe) apart from a genuine final unmount: if a fresh bridge has
+      // attached to the refs by the time this runs, the iframe is being
+      // reused, and we must NOT send `ui/resource-teardown` to it (that would
+      // race the new session's handshake) — just close this one quietly.
+      // Otherwise nothing replaced it: notify the view for real, then close.
+      // (The notification has to happen before the close, since closing
+      // tears down the transport a request would need to send through — so
+      // this can't be "close now, decide whether to notify later".)
+      setTimeout(() => {
+        const wasReused = Boolean(bridgeRef.current || transportRef.current)
+        handle.dispose(!wasReused)
+      }, 0)
     }
   }, [sessionToken, resourceUri, htmlWithCsp])
-
-  // Teardown resource only when the component unmounts
-  useEffect(() => {
-    return () => {
-      if (resetTimerRef.current) clearTimeout(resetTimerRef.current)
-      if (bridgeRef.current) {
-        bridgeRef.current.teardownResource({}).catch(() => void 0)
-        bridgeRef.current = null
-      }
-      if (transportRef.current) {
-        void transportRef.current.close()
-        transportRef.current = null
-      }
-    }
-  }, [])
 
   // Send tool result if result arrives after initialization
   useEffect(() => {
