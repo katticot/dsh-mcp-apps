@@ -17,7 +17,7 @@ Render live, interactive, sandboxed web applications directly inside DSH chat tu
 
 - **Sandboxed Web Applications**: Renders rich interactive UIs (dashboards, charts, maps, forms) inside an isolated `<iframe sandbox="allow-scripts allow-forms allow-downloads">` (without `allow-same-origin`) with a Content Security Policy synthesized from resource metadata. Domains are sanitized with a hand-rolled allowlist regex (not a full RFC 3986 URL parser) that rejects wildcards, private/loopback/link-local IPs, `http://`, and comment-injection payloads (`<!--`/`-->`) before they reach the policy string; the `<meta http-equiv="Content-Security-Policy">` tag is inserted as the first child of `<head>`.
 - **Resilient PostMessage Handshake**: Solves iframe race conditions where inline `<script>` in `srcDoc` sends `ui/initialize` during HTML parsing before parent listeners attach. `ResilientPostMessageTransport` calls `window.addEventListener('message', ...)` synchronously in its constructor and buffers early JSON-RPC packets in FIFO order until `bridge.connect()` finishes wiring `onmessage`.
-- **Multi-Transport Server Pool**: Manages concurrent MCP connections, started in parallel with reconnect backoff, across **Stdio** (isolated subprocesses with environment scrubbing via `@deepseek-ai/dsh-subprocess`), **Remote** (SSE, Streamable HTTP, and WebSocket), and **Local IPC** (Unix domain sockets with POSIX UID verification).
+- **Multi-Transport Server Pool**: Manages concurrent MCP connections, started in parallel with reconnect backoff, across **Stdio** (isolated subprocesses with environment scrubbing via `@deepseek-ai/dsh-subprocess`) and **Remote** (SSE and Streamable HTTP). Only transports defined by the MCP specification are supported: `stdio`, `streamable-http`, and `sse` (deprecated upstream, kept for older servers).
 - **LLM Schema Compliance**: Normalizes tool names to `^[a-zA-Z0-9_-]+$`, caps lengths at 64 characters, and appends SHA-256 collision digests (`mcp__<server>__<tool>_<hash>`) to satisfy frontier LLM API schemas. Tool sync is fingerprinted (description + input schema + UI resource URI) so unchanged tools aren't re-registered on every reconnect.
 - **DSH Anti-Collapse Auto-Reveal**: Walks up the DOM from the iframe and, on a `[hidden]` ancestor, dispatches a `beforematch` event and removes the attribute — detecting and reversing DSH's `useSearchableHidden` fold behavior rather than intercepting the hook itself — so interactive dashboards don't collapse into 1-line folded accordions when model streaming finishes. Includes an `Interactive App` badge, manual fold toggle, and state-preserving styles (`contain: strict`).
 - **Reverse Tool-Call Security**: Session tokens plus a per-server `allowAppToolCalls` policy gate which tools an embedded app can call back into the host (see [Reverse Tool-Call Security Model](#reverse-tool-call-security-model) below).
@@ -42,7 +42,7 @@ DSH Chat Turn ──> McpAppToolView (React 18)
                         │
                         ├─ ServerToolManager (Name Sanitization, Fingerprinted Sync & Visibility)
                         ├─ AppSessionStore (Reverse Tool-Call Session Tokens)
-                        └─ ServerPool (stdio | sse | streamable-http | websocket | ipc)
+                        └─ ServerPool (stdio | sse | streamable-http)
 ```
 
 ---
@@ -78,7 +78,7 @@ Add the plugin to your profile configuration (e.g. `~/.dsh/cordis.patch.yml` or 
         toolCallTimeoutMs: 45000
         allowAppToolCalls: approve
 
-      # Remote SSE / Streamable HTTP / WebSocket server
+      # Remote SSE / Streamable HTTP server
       remote-analytics:
         transport: sse
         url: 'https://mcp.example.com/sse'
@@ -87,11 +87,6 @@ Add the plugin to your profile configuration (e.g. `~/.dsh/cordis.patch.yml` or 
         allowedVars: [MCP_TOKEN]   # secret-shaped vars are blocked unless listed
         reconnectOptions:
           maxRetries: 10
-
-      # Local Unix Domain Socket
-      daemon:
-        transport: ipc
-        socketPath: '/tmp/mcp-daemon.sock'
 ```
 
 ---
@@ -113,36 +108,21 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
 | :--- | :--- | :--- | :--- |
 | `servers` | `Record<string, ServerConfig>` | `{}` | Map of server identifiers to transport configs. Names cannot contain `__` or end with `_`. |
 | `defaultTimeoutMs` | `number` | `30000` | Fallback timeout in ms for tool calls (must be `>= 1`). |
-| `servers.<id>.transport` | `'stdio' \| 'sse' \| 'streamable-http' \| 'websocket' \| 'ipc'` | *(Required)* | Transport mechanism. |
+| `servers.<id>.transport` | `'stdio' \| 'sse' \| 'streamable-http'` | *(Required)* | Transport mechanism. Only transports defined by the MCP specification are supported: `stdio`, `streamable-http`, and `sse` (deprecated upstream, kept for older servers). |
 | `servers.<id>.command` | `string` | — | Executable binary path (for `stdio`). |
 | `servers.<id>.args` | `string[]` | `[]` | Command arguments (for `stdio`). |
 | `servers.<id>.cwd` | `string` | — | Working directory (for `stdio`). |
 | `servers.<id>.env` | `Record<string, string>` | `{}` | Environment variables, with `${VAR}` / `${VAR:-default}` expansion (for `stdio`). |
-| `servers.<id>.url` | `string` | — | Remote endpoint URL (for `sse`, `streamable-http`, `websocket`); must match `http(s)://` or `ws(s)://`. Plain `http://` is only allowed to a loopback host (`localhost`, `127.0.0.1`, `::1`) — anything else is rejected at connect time. |
-| `servers.<id>.headers` | `Record<string, string>` | `{}` | Custom HTTP headers, with the same `${VAR}` expansion as `env` (for `sse`, `streamable-http`). **Not supported on `websocket`** — a non-empty `headers` map on a websocket server throws at connect time. |
-| `servers.<id>.socketPath` | `string` | — | Local Unix socket path with UID verification (for `ipc`). |
+| `servers.<id>.url` | `string` | — | Remote endpoint URL (for `sse`, `streamable-http`); must match `http(s)://`. Plain `http://` is only allowed to a loopback host (`localhost`, `127.0.0.1`, `::1`) — anything else is rejected at connect time. |
+| `servers.<id>.headers` | `Record<string, string>` | `{}` | Custom HTTP headers, with the same `${VAR}` expansion as `env` (for `sse`, `streamable-http`). |
 | `servers.<id>.toolCallTimeoutMs` | `number` | `30000` | Per-server tool call timeout in ms (must be `>= 1`). |
-| `servers.<id>.reconnectOptions` | `{ maxRetries?, initialDelayMs?, maxDelayMs?, backoffFactor? }` | `{5, 1000, 30000, 1.5}` | Exponential-backoff reconnect tuning, applied on all transports. |
+| `servers.<id>.reconnectOptions` | `{ maxRetries?, initialDelayMs?, maxDelayMs?, backoffFactor? }` | `{5, 1000, 30000, 1.5}` | Exponential-backoff reconnect tuning, applied on `stdio` and remote (`sse`, `streamable-http`) transports. |
 | `servers.<id>.allowAppToolCalls` | `'deny' \| 'approve' \| 'allow' \| boolean` | `false` (`'deny'`) | Reverse tool-call policy — see [Reverse Tool-Call Security Model](#reverse-tool-call-security-model). |
 | `servers.<id>.allowedPermissions` | `string[]` | `[]` | Allowlist for `camera`, `microphone`, and `geolocation` iframe permissions requested by a resource's UI metadata; all three are denied unless explicitly listed here. Other permission keys pass through unfiltered into the iframe's `allow` attribute. |
 | `servers.<id>.allowedVars` | `string[]` | `[]` | Env var names this server may read via `${VAR}` expansion (in `env` or `headers`) despite being `DSH_*`-prefixed, secret-shaped (`KEY`/`PASSWORD`/`SECRET`/`TOKEN`), or an agent socket (`SSH_AUTH_SOCK`, `GPG_AGENT_INFO`), which are blocked by default. E.g. `allowedVars: ['API_TOKEN']` lets `headers: { Authorization: 'Bearer ${API_TOKEN}' }` resolve (for `stdio`, `sse`, `streamable-http`). |
-| `servers.<id>.maxMessageBytes` | `number` | `16777216` (16MB) | Maximum size in bytes of a single incoming message from a remote server (for `sse`, `streamable-http`, `websocket`; must be `>= 1`). For `sse`/`streamable-http` this caps each individual SSE event (not the total stream lifetime) via a byte-counting wrapper around `fetch`; for `websocket` it caps each parsed message and closes the socket if exceeded. Protects against a malicious or misbehaving remote server exhausting host memory. |
+| `servers.<id>.maxMessageBytes` | `number` | `16777216` (16MB) | Maximum size in bytes of a single incoming message from a remote server (for `sse`, `streamable-http`; must be `>= 1`). This caps each individual SSE event (not the total stream lifetime) via a byte-counting wrapper around `fetch`. Protects against a malicious or misbehaving remote server exhausting host memory. |
 
 `${VAR}` / `${VAR:-default}` expansion only applies to `env` and `headers` values — not to `url`, `args`, or `cwd`. `$$` is an escaped literal `$`. A default value cannot itself contain a nested `${...}` expansion (e.g. `${MISSING:-${PORT}}` is taken literally, not expanded recursively).
-
-### Windows IPC (limitation)
-
-On POSIX, the `ipc` transport verifies before connecting that the socket's
-parent directory is `0700` and that both the directory and the socket file
-are owned by the current user, refusing to connect otherwise. **Windows has
-no equivalent check implemented.** There is no cross-platform, dependency-free
-way to inspect a named pipe's ACL from Node without a native addon, so rather
-than silently skipping the check, `IpcClientTransport` logs a `console.warn`
-identifying the gap every time it connects on `win32` and connects anyway
-(it fails open, not closed, since a hard failure would make `ipc` entirely
-unusable on Windows for a check we can't perform). If you use the `ipc`
-transport on Windows, make sure the named pipe itself is protected by an
-appropriate ACL — the plugin cannot verify this for you on that platform.
 
 ---
 
