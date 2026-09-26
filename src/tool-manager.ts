@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import { getToolUiResourceUri, isToolVisibilityModelOnly, isToolVisibilityAppOnly } from '@modelcontextprotocol/ext-apps/app-bridge'
-import type { AppSessionStore } from './session-store'
+import type { AppSessionStore, AgentSessionId, ToolCallIdentifier } from './session-store'
 import { resolveToolCallTimeoutMs, type ServerConfig } from './config'
 
 const MAX_PUBLIC_NAME_LENGTH = 64
@@ -180,7 +180,7 @@ export class ServerToolManager {
                 }
               },
             },
-            execute: async (args: unknown, exec?: { agent?: { id?: string }; rootCallId?: string; callId?: string; signal?: AbortSignal }) => {
+            execute: async (args: unknown, exec?: { agent?: { id?: AgentSessionId }; rootCallId?: ToolCallIdentifier; callId?: ToolCallIdentifier; signal?: AbortSignal }) => {
               const argumentsValue = typeof args === 'object' && args !== null && !Array.isArray(args) ? args : {}
               const timeout = resolveToolCallTimeoutMs(serverConfig, this.defaultTimeoutMs)
               const result = await client.callTool({

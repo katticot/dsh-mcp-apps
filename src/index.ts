@@ -138,9 +138,18 @@ export function apply(ctx: Context, config: Config) {
 
               const serverConfig = config.servers[session.serverName]
               if (serverConfig?.allowAppToolCalls === 'approve') {
-                const approvalService = ctx.approval ?? (typeof (ctx as any).get === 'function' ? (ctx as any).get('approval') : undefined)
-                const agentsService = ctx.agents ?? (typeof (ctx as any).get === 'function' ? (ctx as any).get('agents') : undefined)
-                const agent = session.agentId && agentsService ? agentsService.get(session.agentId as any) : undefined
+                // `approval`/`agents` aren't in this plugin's `inject` list (they're
+                // optional services), so direct property access on `ctx` may not see
+                // them if their providing fiber isn't active in this scope. `ctx.get`
+                // (typed by cordis's own `ReflectService` augmentation — see
+                // node_modules/@deepseek-ai/cordis lib/types/reflect.d.ts) performs the
+                // same non-strict service lookup without requiring an `inject` entry.
+                // The `typeof` guard (not a cast — `ctx.get` is fully typed) keeps this
+                // working against minimal host/test `Context` stand-ins that don't
+                // implement the full cordis reflection surface.
+                const approvalService = ctx.approval ?? (typeof ctx.get === 'function' ? ctx.get('approval') : undefined)
+                const agentsService = ctx.agents ?? (typeof ctx.get === 'function' ? ctx.get('agents') : undefined)
+                const agent = session.agentId && agentsService ? agentsService.get(session.agentId) : undefined
 
                 if (!approvalService || !agent) {
                   return { ok: false, error: { code: 'unavailable', message: 'Approval service or agent not available for tool call approval' } }
@@ -154,7 +163,7 @@ export function apply(ctx: Context, config: Config) {
                   const outcome: ApprovalOutcome = await approvalService.request({
                     agent,
                     toolName,
-                    callId: session.callId as any,
+                    callId: session.callId,
                     reason: `MCP App requested execution of tool "${toolName}"`,
                     signal,
                   })
