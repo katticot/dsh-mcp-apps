@@ -1,6 +1,6 @@
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
-import { expandEnvVars, type StdioServerConfig } from '../config'
+import { EXTRA_BLOCKED_ENV_VARS, expandEnvVars, type StdioServerConfig } from '../config'
 
 export interface ManagedStdio {
   transport: StdioClientTransport
@@ -8,9 +8,20 @@ export interface ManagedStdio {
 }
 
 export function createStdioTransport(config: StdioServerConfig): ManagedStdio {
-  const expandedEnv = expandEnvVars(config.env)
+  const expandedEnv = expandEnvVars(config.env, process.env, new Set(config.allowedVars))
+
+  // scrubbedParentEnv() strips DSH_* and KEY/PASSWORD/SECRET/TOKEN-shaped
+  // names, but not agent-socket variables like SSH_AUTH_SOCK or
+  // GPG_AGENT_INFO, which would otherwise hand a spawned MCP server access
+  // to the host's live credential agents. Strip those from the inherited
+  // env; an explicit value in config.env still wins below.
+  const inheritedEnv = scrubbedParentEnv()
+  for (const blocked of EXTRA_BLOCKED_ENV_VARS) {
+    delete inheritedEnv[blocked]
+  }
+
   const safeEnv = {
-    ...scrubbedParentEnv(process.env),
+    ...inheritedEnv,
     ...expandedEnv,
   }
 
