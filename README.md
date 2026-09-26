@@ -5,90 +5,106 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.3-61dafb.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Cordis](https://img.shields.io/badge/Cordis-v4.0-7952b3.svg?style=flat-square)](https://cordis.moe/)
-[![Tests](https://img.shields.io/badge/Tests-passing-brightgreen.svg?style=flat-square&logo=vitest)](https://vitest.dev/)
+[![Tests](https://github.com/katticot/dsh-mcp-apps/actions/workflows/ci.yml/badge.svg)](https://github.com/katticot/dsh-mcp-apps/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
-**Universal SEP-1865 MCP Apps Host & UI Plugin for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).**
+**Renders MCP Apps as sandboxed interactive iframes in [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) web chat.**
 
-Render live, interactive, sandboxed web applications directly inside DSH chat turns when Model Context Protocol (MCP) servers return `ui://` resources.
-
----
-
-## What It Does
-
-- **Sandboxed Web Applications**: Renders rich interactive UIs (dashboards, charts, maps, forms) inside an isolated `<iframe sandbox="allow-scripts allow-forms allow-downloads">` (without `allow-same-origin`) with a Content Security Policy synthesized from resource metadata. Domains are sanitized with a hand-rolled allowlist regex (not a full RFC 3986 URL parser) that rejects wildcards, private/loopback/link-local IPs, `http://`, and comment-injection payloads (`<!--`/`-->`) before they reach the policy string; the `<meta http-equiv="Content-Security-Policy">` tag is inserted as the first child of `<head>`.
-- **Resilient PostMessage Handshake**: Solves iframe race conditions where inline `<script>` in `srcDoc` sends `ui/initialize` during HTML parsing before parent listeners attach. `ResilientPostMessageTransport` calls `window.addEventListener('message', ...)` synchronously in its constructor and buffers early JSON-RPC packets in FIFO order until `bridge.connect()` finishes wiring `onmessage`.
-- **Multi-Transport Server Pool**: Manages concurrent MCP connections, started in parallel with reconnect backoff, across **Stdio** (isolated subprocesses with environment scrubbing via `@deepseek-ai/dsh-subprocess`) and **Remote** (SSE and Streamable HTTP). Only transports defined by the MCP specification are supported: `stdio`, `streamable-http`, and `sse` (deprecated upstream, kept for older servers).
-- **LLM Schema Compliance**: Normalizes tool names to `^[a-zA-Z0-9_-]+$`, caps lengths at 64 characters, and appends SHA-256 collision digests (`mcp__<server>__<tool>_<hash>`) to satisfy frontier LLM API schemas. Tool sync is fingerprinted (description + input schema + UI resource URI) so unchanged tools aren't re-registered on every reconnect.
-- **DSH Anti-Collapse Auto-Reveal**: Walks up the DOM from the iframe and, on a `[hidden]` ancestor, dispatches a `beforematch` event and removes the attribute — detecting and reversing DSH's `useSearchableHidden` fold behavior rather than intercepting the hook itself — so interactive dashboards don't collapse into 1-line folded accordions when model streaming finishes. Includes an `Interactive App` badge, manual fold toggle, and state-preserving styles (`contain: strict`).
-- **Reverse Tool-Call Security**: Session tokens plus a per-server `allowAppToolCalls` policy gate which tools an embedded app can call back into the host (see [Reverse Tool-Call Security Model](#reverse-tool-call-security-model) below).
-- **Dynamic Resizing with Circuit Breaker**: Listens to `ui/notifications/size-changed` with a 6px hysteresis deadband, height clamping (160px–1200px), `requestAnimationFrame`-scheduled updates, and a 1-second sliding-window circuit breaker (mutes after 10 resize events within any 1000ms window, then flushes the last pending height once the window clears) to prevent layout thrashing.
+<!-- Screenshot / GIF of a rendered MCP App (e.g. a dashboard or map) inside DSH web chat goes here. -->
 
 ---
 
-## Architecture
+## What is this?
 
-```
-DSH Chat Turn ──> McpAppToolView (React 18)
-                        │
-                        ├─ Sandboxed <iframe> (AppBridge UI Guest)
-                        │       ▲
-                        │       │ postMessage
-                        ▼       ▼
-                  ResilientPostMessageTransport (Early Queue Buffer)
-                        │
-                        │ RPC (/mcp-apps channel)
-                        ▼
-                  Cordis 4 Host Plugin (apply)
-                        │
-                        ├─ ServerToolManager (Name Sanitization, Fingerprinted Sync & Visibility)
-                        ├─ AppSessionStore (Reverse Tool-Call Session Tokens)
-                        └─ ServerPool (stdio | sse | streamable-http)
-```
+MCP servers can return more than text: the [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) extension (SEP-1865) lets a tool result carry a `ui://` resource — a small, self-contained web app such as a dashboard, a map, or a form. By default, DSH doesn't know what to do with these and just shows the raw tool result. `dsh-mcp-apps` is a Cordis 4 plugin for DSH that recognizes these `ui://` resources and renders them as live, interactive apps directly inside the chat turn, in a sandboxed iframe. The app can also call back into the host to run more tools (e.g. a "Refresh" button), gated behind an explicit, per-server approval policy.
 
----
+## Features
 
-## Quick Start
+- Renders MCP Apps (`ui://` resources) as interactive dashboards, charts, maps, and forms right inside DSH chat.
+- Every app runs sandboxed in an iframe with an auto-generated Content Security Policy — no `allow-same-origin`, no ambient access to the host page.
+- Connects to any MCP server over stdio, SSE, or Streamable HTTP, with automatic reconnect.
+- Apps can call back into host tools (e.g. a "Refresh Data" button), off by default and configurable per server (`deny` / `approve` / `allow`).
+- Rendered apps carry an `Interactive App` badge and resist DSH's auto-collapse behavior, so they don't fold away when the model finishes streaming.
+- Handles secrets safely: `${VAR}` expansion for env vars and headers blocks DSH-internal and secret-shaped variable names unless you explicitly allow them.
 
-### 1. Installation
+## Requirements
 
-Install `dsh-mcp-apps` into your DSH environment:
+- Node.js >= 22
+- [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness)
+- The **web** profile. The plugin's client bundle is injected only when `dsh.client.platform` is `web` (see `package.json`), so its UI does not render in other profiles (e.g. `tui`, `headless`) even if the plugin is installed there.
+
+## Install
 
 ```bash
-pnpm add dsh-mcp-apps
+npx @deepseek-ai/dsh plugin --profile web add dsh-mcp-apps
 ```
 
-### 2. Configure DSH (`cordis.patch.yml`)
+This forwards to `pnpm` inside your DSH **profile directory** (`$DSH_HOME/profiles/web`), not your current project — it adds `dsh-mcp-apps` to that profile's own `package.json`. Don't run a plain `pnpm add dsh-mcp-apps` in an unrelated project and expect it to do anything for DSH.
 
-Add the plugin to your profile configuration (e.g. `~/.dsh/cordis.patch.yml` or `~/.dsh/profiles/web/cordis.patch.yml`):
+Installing alone does not activate the plugin — you still need to add it to your profile's config (next section) so the loader picks it up.
+
+## Configure
+
+Add the plugin to your profile's patch file, e.g. `~/.dsh/profiles/web/cordis.patch.yml`. This file is a top-level YAML array of loader patch entries; to **add** a new plugin (rather than override an existing one by `id`), wrap it in an `insert:` list:
 
 ```yaml
-- id: mcp-apps
-  name: 'dsh-mcp-apps'
-  config:
-    defaultTimeoutMs: 30000
-    servers:
-      # Local Stdio Subprocess (env variables support ${VAR} / ${VAR:-default} expansion)
-      powerhive:
-        transport: stdio
-        command: go
-        args: ['run', 'main.go']
-        cwd: '/path/to/mcp-server'
-        env:
-          DATABASE_URL: '${DATABASE_URL}'
-        toolCallTimeoutMs: 45000
-        allowAppToolCalls: approve
+- insert:
+    - id: mcp-apps
+      name: 'dsh-mcp-apps'
+      config:
+        servers:
+          # A remote server speaking Streamable HTTP or SSE
+          my-server:
+            transport: streamable-http
+            url: 'https://your-mcp-server.example.com/mcp'
 
-      # Remote SSE / Streamable HTTP server
-      remote-analytics:
-        transport: sse
-        url: 'https://mcp.example.com/sse'
-        headers:
-          Authorization: 'Bearer ${MCP_TOKEN}'
-        allowedVars: [MCP_TOKEN]   # secret-shaped vars are blocked unless listed
-        reconnectOptions:
-          maxRetries: 10
+          # An OAuth-protected remote server, proxied through mcp-remote
+          my-oauth-server:
+            transport: stdio
+            command: npx
+            args: [-y, mcp-remote@0.1.37, 'https://your-mcp-server.example.com/mcp']
 ```
+
+A bare top-level entry (no `insert:`) is treated as a **patch to an existing `id`** and fails with `entry "<id>" not found` if that id isn't already present — it will not create a new plugin entry.
+
+A fuller example, showing environment expansion, headers, and reverse tool-calls:
+
+```yaml
+- insert:
+    - id: mcp-apps
+      name: 'dsh-mcp-apps'
+      config:
+        defaultTimeoutMs: 30000
+        servers:
+          # Local stdio subprocess (env values support ${VAR} / ${VAR:-default} expansion)
+          local-tool:
+            transport: stdio
+            command: go
+            args: ['run', 'main.go']
+            cwd: '/path/to/mcp-server'
+            env:
+              DATABASE_URL: '${DATABASE_URL}'
+            toolCallTimeoutMs: 45000
+            allowAppToolCalls: approve
+
+          # Remote SSE server with an auth header
+          remote-analytics:
+            transport: sse
+            url: 'https://mcp.example.com/sse'
+            headers:
+              Authorization: 'Bearer ${MCP_TOKEN}'
+            allowedVars: [MCP_TOKEN]   # secret-shaped vars are blocked unless listed
+            reconnectOptions:
+              maxRetries: 10
+```
+
+## Run & verify
+
+```bash
+npx @deepseek-ai/dsh web
+```
+
+Call a tool on a configured server that returns a `ui://` resource. If everything is wired up, the tool result renders as a live app in the chat turn with an **Interactive App** badge, instead of raw JSON/text.
 
 ---
 
@@ -124,6 +140,19 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
 | `servers.<id>.maxMessageBytes` | `number` | `16777216` (16MB) | Maximum size in bytes of a single incoming message from a remote server (for `sse`, `streamable-http`; must be `>= 1`). This caps each individual SSE event (not the total stream lifetime) via a byte-counting wrapper around `fetch`. Protects against a malicious or misbehaving remote server exhausting host memory. |
 
 `${VAR}` / `${VAR:-default}` expansion only applies to `env` and `headers` values — not to `url`, `args`, or `cwd`. `$$` is an escaped literal `$`. A default value cannot itself contain a nested `${...}` expansion (e.g. `${MISSING:-${PORT}}` is taken literally, not expanded recursively).
+
+## Troubleshooting
+
+- **Tools show up twice**: running `@deepseek-ai/dsh-mcp-client` against the same MCP server alongside this plugin registers that server's tools through both plugins, duplicating them. Use one or the other for a given server.
+- **`${VAR}` isn't expanding**: `DSH_*`-prefixed and secret-shaped (`KEY`/`PASSWORD`/`SECRET`/`TOKEN`) variable names, plus `SSH_AUTH_SOCK`/`GPG_AGENT_INFO`, are blocked by default — add the name to that server's `allowedVars`.
+- **The app's button does nothing**: `allowAppToolCalls` defaults to `deny`. Set it to `approve` or `allow`. Under `approve`, the call also needs an open, running agent turn to prompt for approval — it fails with `unavailable` outside of that window.
+- **Remote connection rejected**: plain `http://` is only allowed to a loopback host (`localhost`, `127.0.0.1`, `::1`); anything else must be `https://`.
+- **Nothing renders**: the client UI only loads under the **web** profile (`dsh.client.platform: "web"`). It won't render in `tui`, `headless`, or other profiles.
+- **Plugin doesn't seem to load**: check that your patch entry uses the `insert:` shape (see [Configure](#configure)) — a bare top-level `- id:` entry is a patch to an *existing* id and errors instead of registering a new plugin. Run `npx @deepseek-ai/dsh --profile web --patch <file> --dump-config` to print the composed config and confirm your entry appears.
+
+## How it works
+
+The plugin bridges a sandboxed iframe and the DSH host over `postMessage`-based JSON-RPC, manages a pool of MCP server connections, and normalizes tool names/visibility for the LLM. For the full internals — CSP synthesis, the postMessage handshake, tool fingerprinting, the anti-collapse behavior, and the resize circuit breaker — see [docs/how-it-works.md](https://github.com/katticot/dsh-mcp-apps/blob/main/docs/how-it-works.md).
 
 ---
 
