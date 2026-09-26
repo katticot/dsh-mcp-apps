@@ -20,17 +20,9 @@ describe('Config Schema Validation', () => {
         streamMcp: {
           transport: 'streamable-http',
           url: 'https://mcp.example.com/stream',
-        },
-        wsMcp: {
-          transport: 'websocket',
-          url: 'wss://mcp.example.com/ws',
           reconnectOptions: {
             maxRetries: 10,
           },
-        },
-        localIpc: {
-          transport: 'ipc',
-          socketPath: '/tmp/mcp.sock',
         },
       },
     }
@@ -46,13 +38,8 @@ describe('Config Schema Validation', () => {
     expect(parsed.servers.cloudMcp.allowAppToolCalls).toBe(false)
 
     expect(parsed.servers.streamMcp.transport).toBe('streamable-http')
-    expect(parsed.servers.wsMcp.transport).toBe('websocket')
-    expect(parsed.servers.wsMcp.reconnectOptions?.maxRetries).toBe(10)
-    expect(parsed.servers.wsMcp.allowAppToolCalls).toBe(false)
-
-    expect(parsed.servers.localIpc.transport).toBe('ipc')
-    expect(parsed.servers.localIpc.socketPath).toBe('/tmp/mcp.sock')
-    expect(parsed.servers.localIpc.allowAppToolCalls).toBe(false)
+    expect(parsed.servers.streamMcp.reconnectOptions?.maxRetries).toBe(10)
+    expect(parsed.servers.streamMcp.allowAppToolCalls).toBe(false)
   })
 
   it('defaults allowedVars to an empty array and accepts an explicit list', () => {
@@ -148,11 +135,25 @@ describe('Config Schema Validation', () => {
     expect(() => Config(raw as any)).toThrow()
   })
 
-  it('rejects invalid ipc configuration lacking socketPath', () => {
+  it('rejects transport: "ipc" at schema validation (removed non-standard transport)', () => {
     const raw = {
       servers: {
         broken: {
           transport: 'ipc',
+          socketPath: '/tmp/mcp.sock',
+        },
+      },
+    }
+
+    expect(() => Config(raw as any)).toThrow()
+  })
+
+  it('rejects transport: "websocket" at schema validation (removed non-standard transport)', () => {
+    const raw = {
+      servers: {
+        broken: {
+          transport: 'websocket',
+          url: 'wss://mcp.example.com/ws',
         },
       },
     }
@@ -225,13 +226,19 @@ describe('Config Schema Validation', () => {
         a: { transport: 'streamable-http', url: 'ftp://example.com' },
       },
     })).toThrow()
+
+    expect(() => Config({
+      servers: {
+        a: { transport: 'streamable-http', url: 'wss://mcp.example.com/ws' },
+      },
+    })).toThrow()
   })
 
-  it('accepts valid http(s)/ws(s) urls for remote servers', () => {
+  it('accepts valid http(s) urls for remote servers', () => {
     expect(() => Config({
       servers: {
         a: { transport: 'sse', url: 'https://mcp.example.com/sse' },
-        b: { transport: 'websocket', url: 'wss://mcp.example.com/ws' },
+        b: { transport: 'streamable-http', url: 'https://mcp.example.com/stream' },
       },
     })).not.toThrow()
   })

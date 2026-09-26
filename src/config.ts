@@ -1,6 +1,6 @@
 import Schema from '@deepseek-ai/schemastery'
 
-const REMOTE_URL_PATTERN = /^(https?|wss?):\/\/\S+$/
+const REMOTE_URL_PATTERN = /^https?:\/\/\S+$/
 
 export interface ReconnectOptions {
   maxRetries?: number
@@ -26,7 +26,7 @@ export interface StdioServerConfig {
 }
 
 export interface RemoteServerConfig {
-  transport: 'sse' | 'streamable-http' | 'websocket'
+  transport: 'sse' | 'streamable-http'
   url: string
   headers?: Record<string, string>
   toolCallTimeoutMs?: number
@@ -35,20 +35,11 @@ export interface RemoteServerConfig {
   allowedPermissions?: string[]
   /** Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read. */
   allowedVars?: string[]
-  /** Maximum size in bytes of a single incoming message (an SSE event, a streamable-http response body, or a websocket message). Default 16MB. */
+  /** Maximum size in bytes of a single incoming message (an SSE event or a streamable-http response body). Default 16MB. */
   maxMessageBytes?: number
 }
 
-export interface IpcServerConfig {
-  transport: 'ipc'
-  socketPath: string
-  toolCallTimeoutMs?: number
-  reconnectOptions?: ReconnectOptions
-  allowAppToolCalls?: AppToolCallsSetting | boolean
-  allowedPermissions?: string[]
-}
-
-export type ServerConfig = StdioServerConfig | RemoteServerConfig | IpcServerConfig
+export type ServerConfig = StdioServerConfig | RemoteServerConfig
 
 export interface Config {
   servers: Record<string, ServerConfig>
@@ -86,7 +77,6 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   transport: Schema.union([
     Schema.const('sse'),
     Schema.const('streamable-http'),
-    Schema.const('websocket'),
   ]).required(),
   url: Schema.string().required().pattern(REMOTE_URL_PATTERN),
   headers: Schema.dict(String).default({}),
@@ -96,15 +86,6 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   allowedPermissions: Schema.array(String).default([]),
   allowedVars: Schema.array(String).default([]),
   maxMessageBytes: Schema.number().min(1).default(16 * 1024 * 1024),
-})
-
-const IpcSchema: Schema<IpcServerConfig> = Schema.object({
-  transport: Schema.const('ipc').required(),
-  socketPath: Schema.string().required(),
-  toolCallTimeoutMs: Schema.number().min(1).default(30000),
-  reconnectOptions: ReconnectSchema.default({}),
-  allowAppToolCalls: AppToolCallsSchema,
-  allowedPermissions: Schema.array(String).default([]),
 })
 
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 30000
@@ -130,7 +111,7 @@ const ServerNameSchema = Schema.string()
   .description('Server name cannot contain consecutive underscores or end with an underscore')
 
 export const Config: Schema<Config> = Schema.object({
-  servers: Schema.dict(Schema.union([StdioSchema, RemoteSchema, IpcSchema]).required(), ServerNameSchema).default({}),
+  servers: Schema.dict(Schema.union([StdioSchema, RemoteSchema]).required(), ServerNameSchema).default({}),
   defaultTimeoutMs: Schema.number().min(1).default(30000),
 })
 
