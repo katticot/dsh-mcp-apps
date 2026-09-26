@@ -1,4 +1,16 @@
 import crypto from 'node:crypto'
+import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
+import type { ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
+
+/**
+ * Branded session/call identifiers, derived structurally from the
+ * `@deepseek-ai/dsh-agent` / `@deepseek-ai/dsh-user-approval` optional peer
+ * types (both already declared as peer/dev dependencies) instead of adding
+ * a direct dependency on `@deepseek-ai/dsh-session` / `@deepseek-ai/dsh-llm`
+ * just to name the two brand types (`SessionId`, `ToolCallId`) they own.
+ */
+export type AgentSessionId = Parameters<AgentRegistry['get']>[0]
+export type ToolCallIdentifier = NonNullable<ApprovalRequest['callId']>
 
 export interface AppSession {
   sessionToken: string
@@ -6,15 +18,15 @@ export interface AppSession {
   rawToolName: string
   resourceUri?: string
   allowedReverseTools: Set<string>
-  agentId?: string
-  callId?: string
+  agentId?: AgentSessionId
+  callId?: ToolCallIdentifier
   createdAt: number
   expiresAt: number
 }
 
 export interface CreateSessionOptions {
-  agentId?: string
-  callId?: string
+  agentId?: AgentSessionId
+  callId?: ToolCallIdentifier
 }
 
 export class AppSessionStore {

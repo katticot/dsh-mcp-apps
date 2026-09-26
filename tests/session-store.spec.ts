@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
-import { AppSessionStore } from '../src/session-store'
+import { AppSessionStore, type AgentSessionId, type ToolCallIdentifier } from '../src/session-store'
 
 describe('AppSessionStore', () => {
   it('creates unique 256-bit cryptographic tokens and attaches agentId and callId', () => {
     const store = new AppSessionStore()
     const session1 = store.createSession('postgres', 'query', 'ui://postgres/app', ['query', 'explain'], {
-      agentId: 'agent-123',
-      callId: 'call-456',
+      agentId: 'agent-123' as AgentSessionId,
+      callId: 'call-456' as ToolCallIdentifier,
     })
     const session2 = store.createSession('postgres', 'query', 'ui://postgres/app', ['query', 'explain'])
 
