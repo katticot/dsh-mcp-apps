@@ -6,7 +6,6 @@ import { resolveToolCallTimeoutMs, type Config, type ServerConfig } from '../con
 import type { ServerToolManager, UiToolDescriptor } from '../tool-manager'
 import { createStdioTransport, type ManagedStdio } from './subprocess'
 import { createRemoteTransport } from './remote'
-import { IpcClientTransport } from './ipc'
 
 export interface ServerInstance {
   client: Client
@@ -100,10 +99,6 @@ export class ServerPool {
       managedStdio = createStdioTransport(serverConfig)
       disposeTransport = managedStdio.dispose
       await client.connect(managedStdio.transport)
-    } else if (serverConfig.transport === 'ipc') {
-      const ipc = new IpcClientTransport(serverConfig)
-      disposeTransport = () => ipc.close()
-      await client.connect(ipc)
     } else {
       const remote = createRemoteTransport(serverConfig)
       disposeTransport = () => remote.close()

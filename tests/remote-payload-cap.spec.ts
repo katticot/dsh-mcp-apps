@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
-import { createRemoteTransport, createByteCappedFetch, CappedWebSocketClientTransport } from '../src/transports/remote'
+import { createRemoteTransport, createByteCappedFetch } from '../src/transports/remote'
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve) => {
@@ -159,55 +159,5 @@ describe('remote transport payload cap integration', () => {
       url: 'http://127.0.0.1:1/mcp',
     })
     expect(transport).toBeDefined()
-  })
-})
-
-describe('CappedWebSocketClientTransport', () => {
-  it('closes the socket and reports an error when a parsed message exceeds the cap', async () => {
-    const transport = new CappedWebSocketClientTransport(new URL('ws://127.0.0.1:1'), 10)
-    const errors: Error[] = []
-    let closeCalled = false
-    transport.onerror = (err) => errors.push(err)
-
-    // Reach into the inner transport to simulate the underlying WebSocket
-    // delivering an oversized (but already-parsed) message, and to verify
-    // close() is invoked instead of forwarding onmessage.
-    const inner = (transport as unknown as { inner: { close: () => Promise<void>; onmessage?: (m: JSONRPCMessage) => void } }).inner
-    inner.close = async () => {
-      closeCalled = true
-    }
-
-    let forwarded = false
-    transport.onmessage = () => {
-      forwarded = true
-    }
-
-    inner.onmessage?.({ jsonrpc: '2.0', method: 'notify', params: { data: 'x'.repeat(100) } })
-
-    // close() is invoked synchronously; wait a microtask for the .finally to fire.
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(closeCalled).toBe(true)
-    expect(forwarded).toBe(false)
-    expect(errors.some((e) => /exceeded maximum size/i.test(e.message))).toBe(true)
-  })
-
-  it('forwards a normal-sized message without closing the socket', () => {
-    const transport = new CappedWebSocketClientTransport(new URL('ws://127.0.0.1:1'), 10_000)
-    let closeCalled = false
-    const inner = (transport as unknown as { inner: { close: () => Promise<void>; onmessage?: (m: JSONRPCMessage) => void } }).inner
-    inner.close = async () => {
-      closeCalled = true
-    }
-
-    let received: JSONRPCMessage | undefined
-    transport.onmessage = (m) => {
-      received = m
-    }
-
-    inner.onmessage?.({ jsonrpc: '2.0', method: 'notify', params: { ok: true } })
-
-    expect(closeCalled).toBe(false)
-    expect(received).toEqual({ jsonrpc: '2.0', method: 'notify', params: { ok: true } })
   })
 })

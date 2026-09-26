@@ -64,12 +64,4 @@ describe('Remote Transport Security', () => {
       delete process.env.API_TOKEN
     }
   })
-
-  it('throws when headers are provided for websocket transport', () => {
-    expect(() => createRemoteTransport({
-      transport: 'websocket',
-      url: 'wss://mcp.example.com/ws',
-      headers: { Authorization: 'Bearer token' },
-    })).toThrow(/headers are not supported on websocket/i)
-  })
 })

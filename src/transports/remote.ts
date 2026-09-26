@@ -1,8 +1,6 @@
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
-import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js'
 import type { FetchLike, Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import { expandEnvVars, type RemoteServerConfig } from '../config'
 
 export const DEFAULT_MAX_MESSAGE_BYTES = 16 * 1024 * 1024 // 16 MB
@@ -94,60 +92,6 @@ export function createByteCappedFetch(baseFetch: FetchLike, maxMessageBytes: num
   }
 }
 
-/**
- * Wraps `WebSocketClientTransport` (which uses the global `WebSocket` API
- * and has no `maxPayload`-style option) so that a message whose serialized
- * size exceeds `maxMessageBytes` closes the socket with a clear error
- * instead of being forwarded on. The underlying transport already parses
- * the full frame into a `JSONRPCMessage` before invoking `onmessage`, so
- * the size is measured on the re-serialized JSON (UTF-8 byte length, not
- * string length).
- */
-export class CappedWebSocketClientTransport implements Transport {
-  private inner: WebSocketClientTransport
-  private maxMessageBytes: number
-  private _onmessage?: (message: JSONRPCMessage) => void
-
-  onclose?: () => void
-  onerror?: (error: Error) => void
-
-  constructor(url: URL, maxMessageBytes: number) {
-    this.maxMessageBytes = maxMessageBytes
-    this.inner = new WebSocketClientTransport(url)
-    this.inner.onclose = () => this.onclose?.()
-    this.inner.onerror = (error) => this.onerror?.(error)
-    this.inner.onmessage = (message) => {
-      const size = Buffer.byteLength(JSON.stringify(message), 'utf8')
-      if (size > this.maxMessageBytes) {
-        const err = new Error(`WebSocket message exceeded maximum size of ${this.maxMessageBytes} bytes`)
-        this.inner.close().finally(() => this.onerror?.(err))
-        return
-      }
-      this._onmessage?.(message)
-    }
-  }
-
-  get onmessage(): ((message: JSONRPCMessage) => void) | undefined {
-    return this._onmessage
-  }
-
-  set onmessage(handler: ((message: JSONRPCMessage) => void) | undefined) {
-    this._onmessage = handler
-  }
-
-  start(): Promise<void> {
-    return this.inner.start()
-  }
-
-  close(): Promise<void> {
-    return this.inner.close()
-  }
-
-  send(message: JSONRPCMessage): Promise<void> {
-    return this.inner.send(message)
-  }
-}
-
 export function createRemoteTransport(config: RemoteServerConfig): Transport {
   const url = new URL(config.url)
   // URL.hostname keeps the brackets around an IPv6 literal (e.g. "[::1]");
@@ -157,10 +101,6 @@ export function createRemoteTransport(config: RemoteServerConfig): Transport {
 
   if (url.protocol === 'http:' && !isLoopback) {
     throw new Error(`Insecure transport: http:// is forbidden except on loopback (${url.hostname})`)
-  }
-
-  if (config.transport === 'websocket' && config.headers && Object.keys(config.headers).length > 0) {
-    throw new Error('WebSocketClientTransport: headers are not supported on websocket transport')
   }
 
   const expandedHeaders = expandEnvVars(config.headers, process.env, new Set(config.allowedVars))
@@ -186,9 +126,6 @@ export function createRemoteTransport(config: RemoteServerConfig): Transport {
         },
         fetch: cappedFetch,
       })
-
-    case 'websocket':
-      return new CappedWebSocketClientTransport(url, maxMessageBytes)
 
     default:
       throw new Error(`Unsupported remote transport: ${(config as { transport: string }).transport}`)
