@@ -1,6 +1,7 @@
 # dsh-mcp-apps
 
 [![npm](https://img.shields.io/npm/v/dsh-mcp-apps.svg?style=flat-square)](https://www.npmjs.com/package/dsh-mcp-apps)
+[![Downloads](https://img.shields.io/npm/dw/dsh-mcp-apps.svg?style=flat-square)](https://www.npmjs.com/package/dsh-mcp-apps)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.3-61dafb.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Cordis](https://img.shields.io/badge/Cordis-v4.0-7952b3.svg?style=flat-square)](https://cordis.moe/)
