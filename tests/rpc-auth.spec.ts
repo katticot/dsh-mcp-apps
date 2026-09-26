@@ -75,10 +75,10 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
         }),
       },
       connection: {
-        register: vi.fn((_ctx: any, _path: string, handler: any) => {
+        rpc: { handle: vi.fn((_path: string, handler: any) => {
           rpcHandler = handler
           return vi.fn()
-        }),
+        }) },
       },
       effect: vi.fn((fn: () => any) => {
         unloadPlugin = fn()
@@ -100,6 +100,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unauthorized',
         message: 'Missing session token',
+        details: {},
       },
     })
     expect(callToolSpy).not.toHaveBeenCalled()
@@ -115,6 +116,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unauthorized',
         message: 'Invalid or expired session token',
+        details: {},
       },
     })
     expect(callToolSpy).not.toHaveBeenCalled()
@@ -139,6 +141,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unauthorized',
         message: 'Invalid or expired session token',
+        details: {},
       },
     })
     expect(callToolSpy).not.toHaveBeenCalled()
@@ -158,6 +161,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'forbidden',
         message: 'Tool "internal_eval" is not permitted for this session',
+        details: {},
       },
     })
     expect(callToolSpy).not.toHaveBeenCalled()
@@ -178,6 +182,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'forbidden',
         message: 'Tool belongs to a different server',
+        details: {},
       },
     })
     expect(callToolSpy).not.toHaveBeenCalled()
@@ -232,10 +237,10 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
         }),
       },
       connection: {
-        register: vi.fn((_ctx: any, _path: string, handler: any) => {
+        rpc: { handle: vi.fn((_path: string, handler: any) => {
           secureRpcHandler = handler
           return vi.fn()
-        }),
+        }) },
       },
       effect: vi.fn((fn: () => any) => fn()),
       approval: mockApproval,
@@ -300,6 +305,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unavailable',
         message: 'Approval service is unavailable for tool "write_db"',
+        details: {},
       },
     })
 
@@ -313,6 +319,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'cancelled',
         message: 'Approval request for tool "write_db" was cancelled',
+        details: {},
       },
     })
 
@@ -326,6 +333,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unavailable',
         message: 'Approval request failed: Prompt dismissed',
+        details: {},
       },
     })
 
@@ -339,6 +347,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unavailable',
         message: 'Cannot request approval while agent "agent-sec" is idle',
+        details: {},
       },
     })
     expect(mockApproval.request).not.toHaveBeenCalledTimes(6)
@@ -359,7 +368,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     // Case 1: no approval or agents service
     const bareCtx = {
       tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
-      connection: { register: vi.fn((_c, _p, h) => { handlerWithoutServices = h; return vi.fn() }) },
+      connection: { rpc: { handle: vi.fn((_p, h) => { handlerWithoutServices = h; return vi.fn() }) } },
       effect: vi.fn(fn => fn()),
     }
     apply(bareCtx as any, approveConfig as any)
@@ -380,6 +389,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unavailable',
         message: 'Approval service or agent not available for tool call approval',
+        details: {},
       },
     })
 
@@ -387,7 +397,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     let handlerWithDisposedAgent: any
     const ctxDisposed = {
       tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
-      connection: { register: vi.fn((_c, _p, h) => { handlerWithDisposedAgent = h; return vi.fn() }) },
+      connection: { rpc: { handle: vi.fn((_p, h) => { handlerWithDisposedAgent = h; return vi.fn() }) } },
       effect: vi.fn(fn => fn()),
       approval: { request: vi.fn() },
       agents: { get: vi.fn().mockReturnValue(undefined) },
@@ -409,6 +419,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unavailable',
         message: 'Approval service or agent not available for tool call approval',
+        details: {},
       },
     })
 
@@ -423,6 +434,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unavailable',
         message: 'Approval service or agent not available for tool call approval',
+        details: {},
       },
     })
   })
@@ -440,7 +452,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     let deniedHandler: any
     const mockCtx = {
       tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
-      connection: { register: vi.fn((_c, _p, h) => { deniedHandler = h; return vi.fn() }) },
+      connection: { rpc: { handle: vi.fn((_p, h) => { deniedHandler = h; return vi.fn() }) } },
       effect: vi.fn(fn => fn()),
     }
     apply(mockCtx as any, denyConfig as any)
@@ -461,6 +473,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'forbidden',
         message: 'Tool "action" is not permitted for this session',
+        details: {},
       },
     })
   })
@@ -496,6 +509,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       error: {
         code: 'unavailable',
         message: 'Host plugin is unloading',
+        details: {},
       },
     })
   })
@@ -532,7 +546,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
           const res = await rpcHandler(endpoint, { server: 'analytics', ...extraParams })
           expect(res).toEqual({
             ok: false,
-            error: { code: 'unauthorized', message: 'Missing session token' },
+            error: { code: 'unauthorized', message: 'Missing session token', details: {} },
           })
         })
 
@@ -540,7 +554,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
           const res = await rpcHandler(endpoint, { sessionToken: 'bogus-token', server: 'analytics', ...extraParams })
           expect(res).toEqual({
             ok: false,
-            error: { code: 'unauthorized', message: 'Invalid or expired session token' },
+            error: { code: 'unauthorized', message: 'Invalid or expired session token', details: {} },
           })
         })
 
@@ -556,7 +570,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
           const res = await rpcHandler(endpoint, { sessionToken, server: 'analytics', ...extraParams })
           expect(res).toEqual({
             ok: false,
-            error: { code: 'unauthorized', message: 'Invalid or expired session token' },
+            error: { code: 'unauthorized', message: 'Invalid or expired session token', details: {} },
           })
         })
 
