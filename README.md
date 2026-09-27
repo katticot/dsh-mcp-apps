@@ -26,14 +26,26 @@ MCP servers can return more than text: the [MCP Apps](https://github.com/modelco
 - Apps can call back into host tools (e.g. a "Refresh Data" button), off by default and configurable per server (`deny` / `approve` / `allow`).
 - Rendered apps carry an `Interactive App` badge and resist DSH's auto-collapse behavior, so they don't fold away when the model finishes streaming.
 - Handles secrets safely: `${VAR}` expansion for env vars and headers blocks DSH-internal and secret-shaped variable names unless you explicitly allow them.
+- Registers host-side MCP tools (without the iframe UI) on headless DSH hosts too: the plugin's `inject` list (`tools`, `connection`) has no hard `webServer` requirement, so tool calls still work even where there's no browser to render into.
 
 ## Requirements
 
 - Node.js >= 22
-- [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness) `0.1.7-rc.2` with Cordis `~4.0.4`
-- The **web** profile. The plugin's client bundle is injected only when `dsh.client.platform` is `web` (see `package.json`), so its UI does not render in other profiles (e.g. `tui`, `headless`) even if the plugin is installed there.
+- [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness) `>= 0.1.7-rc.2` with Cordis `~4.0.4`
+- The **web** profile, for the iframe UI. The plugin's client bundle is injected only when `dsh.client.platform` is `web` (see `package.json`), so its UI does not render in other profiles (e.g. `tui`, `headless`) even if the plugin is installed there — but the plugin's host-side tools still register on those profiles (see [Features](#features)).
 
 The packed plugin has been installed and exercised in a clean DSH `0.1.7-rc.2` web profile, including iframe rendering and delivery of the fixture tool input/result. Other DSH/Cordis combinations remain unverified; see [the compatibility record](docs/dsh-compatibility.md).
+
+### Compatibility
+
+DSH checks a plugin's `@deepseek-ai/dsh-*` peer ranges against its own runtime version (`evaluatePluginCompatibility`) and refuses to load an incompatible plugin. Match your DSH version to a plugin release:
+
+| `dsh-mcp-apps` | Requires DSH |
+| :--- | :--- |
+| `0.2.2` and later | `>= 0.1.7-rc.2` |
+| `0.2.1` and earlier | `0.1.5-rc.x` |
+
+See [docs/dsh-compatibility.md](docs/dsh-compatibility.md) for how the check works and why an exact-pinned peer (no range operator) fails against a later prerelease.
 
 ## Install
 
@@ -153,6 +165,7 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
 - **Remote connection rejected**: plain `http://` is only allowed to a loopback host (`localhost`, `127.0.0.1`, `::1`); anything else must be `https://`.
 - **Nothing renders**: the client UI only loads under the **web** profile (`dsh.client.platform: "web"`). It won't render in `tui`, `headless`, or other profiles.
 - **Plugin doesn't seem to load**: check that your patch entry uses the `insert:` shape (see [Configure](#configure)) — a bare top-level `- id:` entry is a patch to an *existing* id and errors instead of registering a new plugin. Run `npx @deepseek-ai/dsh --profile web --patch <file> --dump-config` to print the composed config and confirm your entry appears.
+- **`Plugin dsh-mcp-apps@X.Y.Z is incompatible with dsh <version>: peerDependencies {...}`**: your DSH runtime version doesn't satisfy this plugin's `@deepseek-ai/dsh-*` peer ranges. Check the [compatibility table](#compatibility) — `dsh-mcp-apps@0.2.2+` requires DSH `>= 0.1.7-rc.2`; upgrade DSH, or install an older plugin version matched to your DSH release.
 
 ## How it works
 
@@ -177,6 +190,8 @@ pnpm test
 ```
 
 `./client` (the browser-side bundle loaded by DSH's `window.__ModuleLoader__`) is loader-only: it has no `types` entry in `package.json#exports` and cannot be imported directly from Node or a bundler — only the `.` (host) entry ships type declarations.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the release process.
 
 ---
 
