@@ -48,6 +48,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Publish to NPM
-        run: pnpm publish --access public --provenance --no-git-checks
+      - name: Type check, test, build, and verify artifact
+        run: |
+          pnpm typecheck
+          pnpm test
+          pnpm test:artifact
 
+      - name: Pack and smoke test release artifact
+        run: |
+          mkdir -p dist
+          pnpm pack --pack-destination dist
+          PACKAGE_TARBALL="dist/dsh-mcp-apps-$(node -p "require('./package.json').version").tgz"
+          echo "PACKAGE_TARBALL=$PACKAGE_TARBALL" >> "$GITHUB_ENV"
+          pnpm exec playwright install --with-deps chromium
+          for policy in allow deny approve; do
+            pnpm test:smoke "$PACKAGE_TARBALL" --policy="$policy"
+          done
+
+      - name: Publish the verified tarball to NPM
+        run: npm publish "$PACKAGE_TARBALL" --access public --provenance --ignore-scripts

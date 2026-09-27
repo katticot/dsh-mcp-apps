@@ -33,13 +33,13 @@ export default defineConfig([
       entryFileNames: 'client.js',
     },
     noExternal: [/@modelcontextprotocol\/.*/, /zod/],
+    external: ['react', 'react/jsx-runtime'],
     platform: 'browser',
-    banner: 'window.__ModuleLoader__.load({ id: "dsh-mcp-apps", factory: (require) => {\nvar process = window.process || { env: { NODE_ENV: "production" } };\nvar module = { exports: {} }; var exports = module.exports;',
+    banner: 'window.__ModuleLoader__.load({ id: "dsh-mcp-apps", factory: (require) => {\nvar module = { exports: {} }; var exports = module.exports;',
     footer: 'return module.exports; } });',
     define: {
       ...define,
       'process.env.NODE_ENV': JSON.stringify('production'),
-      'process.env': JSON.stringify({ NODE_ENV: 'production' }),
     },
   },
 ])

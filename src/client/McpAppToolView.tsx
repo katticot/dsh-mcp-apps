@@ -1,17 +1,10 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { AppBridge, PostMessageTransport, buildAllowAttribute } from '@modelcontextprotocol/ext-apps/app-bridge'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
+import { AppBridge, buildAllowAttribute } from '@modelcontextprotocol/ext-apps/app-bridge'
 import { withContentSecurityPolicy } from './csp'
 
-export interface ClientConnectionRpc {
-  rpc: {
-    call: (
-      channel: string,
-      endpoint: string,
-      payload: unknown,
-      signal?: AbortSignal
-    ) => Promise<{ ok: true; value: unknown } | { ok: false; error: { code: string; message: string } }>
-  }
-}
+export type ClientConnectionRpc = Pick<ConnectionHandle, 'rpc'>
 
 export interface UiToolInfo {
   publicName: string
@@ -23,13 +16,7 @@ export interface UiToolInfo {
 export interface McpAppToolViewProps {
   tool: UiToolInfo
   connection: ClientConnectionRpc
-  block: {
-    kind?: string
-    call?: { argsRaw?: string } | null
-    argsRaw?: string
-    meta?: unknown
-  }
-  useDisclosure?: () => [boolean, (open: boolean) => void]
+  block: ToolCallViewProps['block']
 }
 
 interface SettledAppCall {
@@ -177,7 +164,7 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
   })
 
   bridge.oncalltool = async (params, extra) => {
-    const res = await rpcCall('/mcp-apps', 'tools/call', {
+    const res = await rpcCall('/api', 'mcp-apps/tools/call', {
       sessionToken,
       server: serverName,
       name: params.name,
@@ -188,7 +175,7 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
   }
 
   bridge.onlistresources = async (_params, extra) => {
-    const res = await rpcCall('/mcp-apps', 'resources/list', {
+    const res = await rpcCall('/api', 'mcp-apps/resources/list', {
       server: serverName,
       sessionToken,
     }, extra?.signal)
@@ -197,7 +184,7 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
   }
 
   bridge.onreadresource = async (params, extra) => {
-    const res = await rpcCall('/mcp-apps', 'resources/read-raw', {
+    const res = await rpcCall('/api', 'mcp-apps/resources/read-raw', {
       server: serverName,
       uri: params.uri,
       sessionToken,
@@ -228,17 +215,12 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
   }
 }
 
-export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAppToolViewProps) {
-  const disclosureState = useDisclosure?.() ?? null
+export function McpAppToolView({ tool, connection, block }: McpAppToolViewProps) {
   const [localExpanded, setLocalExpanded] = useState(true)
-  const isExpanded = disclosureState ? disclosureState[0] : localExpanded
+  const isExpanded = localExpanded
 
   const toggleExpanded = () => {
-    if (disclosureState) {
-      disclosureState[1](!disclosureState[0])
-    } else {
-      setLocalExpanded(!localExpanded)
-    }
+    setLocalExpanded(!localExpanded)
   }
 
   const call = useMemo(() => resolveSettledAppCall(block, tool), [block, tool])
@@ -278,8 +260,8 @@ export function McpAppToolView({ tool, connection, block, useDisclosure }: McpAp
     const controller = new AbortController()
 
     connectionRef.current.rpc.call(
-      '/mcp-apps',
-      'resources/read',
+      '/api',
+      'mcp-apps/resources/read',
       { uri: resourceUri, server: serverName, sessionToken },
       controller.signal
     ).then((res) => {
