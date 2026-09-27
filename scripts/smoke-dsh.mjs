@@ -173,9 +173,12 @@ async function stopDsh() {
   if (!dsh || dsh.exitCode !== null) return
   const pid = (await readEvents()).find(event => event.type === 'ready')?.pid
   dsh.kill('SIGTERM')
-  await Promise.race([new Promise(resolve => dsh.once('exit', resolve)), delay(8_000)])
+  // Generous margins here: shared, slower CI runners take noticeably longer
+  // than a fast local machine to flush the stdio fixture's shutdown event
+  // and let the DSH process exit after SIGTERM.
+  await Promise.race([new Promise(resolve => dsh.once('exit', resolve)), delay(20_000)])
   if (dsh.exitCode === null) dsh.kill('SIGKILL')
-  const deadline = Date.now() + 10_000
+  const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
     const events = await readEvents()
     if (pid === undefined || events.some(event => event.type === 'shutdown' && event.pid === pid)) {
