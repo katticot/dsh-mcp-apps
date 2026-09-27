@@ -164,7 +164,7 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
   })
 
   bridge.oncalltool = async (params, extra) => {
-    const res = await rpcCall('/mcp-apps', 'tools/call', {
+    const res = await rpcCall('/api', 'mcp-apps/tools/call', {
       sessionToken,
       server: serverName,
       name: params.name,
@@ -175,7 +175,7 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
   }
 
   bridge.onlistresources = async (_params, extra) => {
-    const res = await rpcCall('/mcp-apps', 'resources/list', {
+    const res = await rpcCall('/api', 'mcp-apps/resources/list', {
       server: serverName,
       sessionToken,
     }, extra?.signal)
@@ -184,7 +184,7 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
   }
 
   bridge.onreadresource = async (params, extra) => {
-    const res = await rpcCall('/mcp-apps', 'resources/read-raw', {
+    const res = await rpcCall('/api', 'mcp-apps/resources/read-raw', {
       server: serverName,
       uri: params.uri,
       sessionToken,
@@ -260,8 +260,8 @@ export function McpAppToolView({ tool, connection, block }: McpAppToolViewProps)
     const controller = new AbortController()
 
     connectionRef.current.rpc.call(
-      '/mcp-apps',
-      'resources/read',
+      '/api',
+      'mcp-apps/resources/read',
       { uri: resourceUri, server: serverName, sessionToken },
       controller.signal
     ).then((res) => {

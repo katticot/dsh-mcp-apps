@@ -60,6 +60,7 @@
     "build": "tsdown",
     "test": "vitest run",
     "test:artifact": "vitest run --config vitest.artifact.config.ts",
+    "test:smoke": "node scripts/smoke-dsh.mjs",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
@@ -92,8 +93,10 @@
     "@deepseek-ai/dsh-client-connection": "0.1.5-rc.3",
     "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.3",
     "@deepseek-ai/dsh-client-ui-tool": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-llm-mock-server": "0.1.5-rc.3",
     "@deepseek-ai/dsh-subprocess": "0.1.5-rc.3",
     "@deepseek-ai/dsh-user-approval": "0.1.5-rc.3",
+    "@playwright/test": "1.57.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^22.15.0",
     "@types/react": "^18.3.1",

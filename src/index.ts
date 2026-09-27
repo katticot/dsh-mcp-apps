@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { ConnectionRpcHandler, HostConnectionRpc } from '@deepseek-ai/dsh-client-connection'
+import { clientRequestSchema } from '@deepseek-ai/dsh-client-connection'
+import type { ConnectionRpcResult, HostConnectionFetch } from '@deepseek-ai/dsh-client-connection'
 import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { ApprovalService, ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { Config } from './config'
@@ -74,8 +75,8 @@ export function apply(ctx: Context, config: Config) {
       return { session }
     }
 
-    const rpc: HostConnectionRpc = ctx.connection.rpc
-    const unregisterRpc = rpc.handle('/mcp-apps', (async (endpoint, payload, signal) => {
+    const connectionFetch: HostConnectionFetch = ctx.connection.fetch
+    const handleEndpoint = async (endpoint: string, payload: unknown, signal: AbortSignal): Promise<ConnectionRpcResult<unknown>> => {
       if (isDraining) {
         return failure('unavailable', 'Host plugin is unloading')
       }
@@ -197,7 +198,31 @@ export function apply(ctx: Context, config: Config) {
       } finally {
         inFlight.delete(task)
       }
-    }) satisfies ConnectionRpcHandler)
+    }
+
+    const endpoints = ['tools/list-ui', 'resources/list', 'resources/read', 'resources/read-raw', 'tools/call'] as const
+    const unregisterFetchRoutes = endpoints.map(endpoint => connectionFetch.register({
+      path: `/api/mcp-apps/${endpoint}`,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async request => {
+        let message: unknown
+        try {
+          message = await request.json()
+        } catch {
+          return new Response('body is not JSON', { status: 400 })
+        }
+        const parsed = clientRequestSchema.safeParse(message)
+        if (!parsed.success) return new Response('invalid Connection RPC envelope', { status: 400 })
+        const envelope = parsed.data
+        const expectedMethod = `mcp-apps/${endpoint}`
+        if (envelope.method !== expectedMethod) {
+          return new Response('invalid Connection RPC envelope', { status: 400 })
+        }
+        const result = await handleEndpoint(endpoint, envelope.payload, request.signal)
+        return Response.json({ type: 'server-response', rpcId: envelope.rpcId, result })
+      },
+    }))
 
     void pool.startAll()
 
@@ -212,7 +237,9 @@ export function apply(ctx: Context, config: Config) {
         }
       }
 
-      await cleanup(() => unregisterRpc())
+      for (const unregister of unregisterFetchRoutes) {
+        await cleanup(() => unregister())
+      }
 
       let drainTimer: ReturnType<typeof setTimeout> | undefined
       await cleanup(() => Promise.race([

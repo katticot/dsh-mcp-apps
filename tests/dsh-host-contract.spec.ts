@@ -1,5 +1,5 @@
 import { Context } from '@deepseek-ai/cordis'
-import { HostConnectionService, type ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
+import { HostConnectionService, type ConnectionFetchRoute } from '@deepseek-ai/dsh-client-connection'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, name, inject } from '../src/index'
 import type { Config } from '../src/config'
@@ -12,19 +12,16 @@ const config: Config = { servers: {} }
 describe('DSH host contracts', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('registers the RPC handler through the public two-argument connection API', async () => {
-    let registeredChannel: string | undefined
-    let registeredHandler: ConnectionRpcHandler | undefined
-    const unregister = vi.fn(async () => {})
-    const handle = vi.fn((channel: string, handler: ConnectionRpcHandler) => {
-      registeredChannel = channel
-      registeredHandler = handler
-      return unregister
+  it('registers validated app endpoints through public Connection Fetch routes', async () => {
+    const routes = new Map<string, ConnectionFetchRoute>()
+    const register = vi.fn((route: ConnectionFetchRoute) => {
+      routes.set(route.path, route)
+      return async () => { routes.delete(route.path) }
     })
     const effectDisposers: Array<() => unknown> = []
     const ctx = {
       tools: { register: vi.fn(() => vi.fn()) },
-      connection: { rpc: { handle } },
+      connection: { fetch: { register } },
       webServer: { register: vi.fn(() => vi.fn()) },
       effect: vi.fn((effect: () => unknown) => {
         const disposer = effect()
@@ -37,24 +34,44 @@ describe('DSH host contracts', () => {
     const stopAll = vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)
     apply(ctx as any, config)
 
-    expect(handle).toHaveBeenCalledTimes(1)
-    expect(handle).toHaveBeenCalledWith('/mcp-apps', expect.any(Function))
-    expect(registeredChannel).toBe('/mcp-apps')
-    expect(await registeredHandler?.('tools/list-ui', {}, new AbortController().signal)).toEqual({ ok: true, value: [] })
+    expect(register).toHaveBeenCalledTimes(5)
+    expect(routes.has('/api/mcp-apps/tools/list-ui')).toBe(true)
+    const route = routes.get('/api/mcp-apps/tools/list-ui')!
+    expect(route.methods).toEqual(['POST'])
+    expect(route.requestBody).toBe('buffered')
+    const good = await route.fetch(new Request('http://dsh.internal/api/mcp-apps/tools/list-ui', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'smoke-id', method: 'mcp-apps/tools/list-ui', payload: null }),
+    }))
+    expect(await good.json()).toEqual({ type: 'server-response', rpcId: 'smoke-id', result: { ok: true, value: [] } })
+    const malformed = await route.fetch(new Request('http://dsh.internal/api/mcp-apps/tools/list-ui', {
+      method: 'POST',
+      body: JSON.stringify({ type: 'client-request', rpcId: 'smoke-id', method: 'mcp-apps/tools/list-ui' }),
+    }))
+    expect(malformed.status).toBe(400)
+    const mismatched = await route.fetch(new Request('http://dsh.internal/api/mcp-apps/tools/list-ui', {
+      method: 'POST',
+      body: JSON.stringify({ type: 'client-request', rpcId: 'smoke-id', method: 'mcp-apps/resources/list', payload: null }),
+    }))
+    expect(mismatched.status).toBe(400)
+    const invalid = await route.fetch(new Request('http://dsh.internal/api/mcp-apps/tools/list-ui', { method: 'POST', body: '{' }))
+    expect(invalid.status).toBe(400)
     expect(startAll).toHaveBeenCalledOnce()
 
     for (const dispose of effectDisposers) await dispose()
     expect(stopAll).toHaveBeenCalledOnce()
   })
 
-  it('loads, unloads, and reloads under Cordis using the real HostConnectionService', async () => {
+  it('registers and removes exact routes when Connection and webServer are separate Cordis providers', async () => {
     const cordis = new Context()
-    const routes = new Map<string, { handler: unknown; kind: string }>()
+    const webRoutes = new Map<string, { handler: unknown; kind: string }>()
     const definitions: unknown[] = []
+    let connection!: HostConnectionService
     const webServer = {
       register: vi.fn((route: { path: string; kind: string; handler: unknown }) => {
-        routes.set(route.path, route)
-        return () => routes.delete(route.path)
+        webRoutes.set(route.path, route)
+        return () => webRoutes.delete(route.path)
       }),
     }
     const tools = {
@@ -69,41 +86,63 @@ describe('DSH host contracts', () => {
       authenticatedUrl: (url: string) => url,
     }
 
-    const providers = {
-      name: 'host-contract-providers',
+    const baseProviders = {
+      name: 'base-contract-providers',
       apply(ctx: Context) {
         ctx.provide('tools', tools)
         ctx.provide('webServer', webServer)
-        new HostConnectionService(ctx, [], browserAuth as any)
+        ctx.provide('credentials', {} as any)
+      },
+    }
+    const connectionProvider = {
+      name: 'connection-contract-provider',
+      inject: ['credentials'],
+      apply(ctx: Context) {
+        connection = new HostConnectionService(ctx, [], browserAuth as any)
       },
     }
     const feature = { name, inject, apply: (ctx: Context) => apply(ctx, config) }
 
     const startAll = vi.spyOn(ServerPool.prototype, 'startAll').mockResolvedValue(undefined)
     const stopAll = vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)
-    const providerFiber = cordis.plugin(providers)
-    await providerFiber
+    const baseFiber = cordis.plugin(baseProviders)
+    await baseFiber
+    const connectionFiber = cordis.plugin(connectionProvider)
+    await connectionFiber
 
     const firstFiber = cordis.plugin(feature)
     await firstFiber
     expect(firstFiber.state).not.toBe(0)
-    expect(routes.has('/mcp-apps')).toBe(true)
-    expect(webServer.register).toHaveBeenCalledWith(expect.objectContaining({ path: '/mcp-apps', kind: 'prefix' }))
+    expect(webRoutes.size).toBe(0)
+    const handler = connection!.createSharedFetchHandler('/api')
+    const response = await handler.fetch(new Request('http://dsh.internal/api/mcp-apps/tools/list-ui', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'contract-id', method: 'mcp-apps/tools/list-ui', payload: null }),
+    }))
+    expect(await response.json()).toEqual({ type: 'server-response', rpcId: 'contract-id', result: { ok: true, value: [] } })
 
     await firstFiber.dispose()
-    expect(routes.has('/mcp-apps')).toBe(false)
+    const removed = await handler.fetch(new Request('http://dsh.internal/api/mcp-apps/tools/list-ui', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'contract-id', method: 'mcp-apps/tools/list-ui', payload: null }),
+    }))
+    expect(removed.status).toBe(404)
     expect(stopAll).toHaveBeenCalledOnce()
 
     const secondFiber = cordis.plugin(feature)
     await secondFiber
     expect(secondFiber.state).not.toBe(0)
-    expect(routes.has('/mcp-apps')).toBe(true)
+    expect(webRoutes.size).toBe(0)
     expect(startAll).toHaveBeenCalledTimes(2)
 
     await secondFiber.dispose()
-    await providerFiber.dispose()
+    await connectionFiber.dispose()
+    await baseFiber.dispose()
     await cordis.registry.delete(feature)
-    await cordis.registry.delete(providers)
+    await cordis.registry.delete(connectionProvider)
+    await cordis.registry.delete(baseProviders)
   })
 
   it('keeps approve mode unavailable without scoped optional services and rejects stale approval after provider removal', async () => {
@@ -117,11 +156,12 @@ describe('DSH host contracts', () => {
         return () => {}
       }),
     }
+    const connectionRoutes: ConnectionFetchRoute[] = []
     const connection = {
-      rpc: {
-        handle: vi.fn((_channel: string, handler: typeof rpcHandler) => {
-          rpcHandler = handler as typeof rpcHandler
-          return () => {}
+      fetch: {
+        register: vi.fn((route: ConnectionFetchRoute) => {
+          connectionRoutes.push(route)
+          return async () => {}
         }),
       },
     }
@@ -153,6 +193,16 @@ describe('DSH host contracts', () => {
     const featureFiber = cordis.plugin(feature)
     await featureFiber
     expect(featureFiber.state).not.toBe(0)
+    rpcHandler = async (endpoint, payload, signal) => {
+      const route = connectionRoutes.find(candidate => candidate.path === `/api/mcp-apps/${endpoint}`)
+      if (!route) throw new Error(`No route for ${endpoint}`)
+      const response = await route.fetch(new Request(`http://dsh.internal/api/mcp-apps/${endpoint}`, {
+        method: 'POST',
+        body: JSON.stringify({ type: 'client-request', rpcId: `test-${endpoint}`, method: `mcp-apps/${endpoint}`, payload }),
+        signal,
+      }))
+      return (await response.json() as any).result
+    }
 
     const chart = definitions.find(definition => definition.name === 'mcp__secure_srv__chart')
     const session = await chart.execute({}, { agent: { id: 'agent-sec' }, callId: 'call-sec' })
@@ -202,7 +252,7 @@ describe('DSH host contracts', () => {
 
     approval.request.mockImplementationOnce(() => new Promise<string>(resolve => { resolveApproval = resolve }))
     const pending = request()
-    expect(approval.request).toHaveBeenCalledTimes(3)
+    await vi.waitFor(() => expect(approval.request).toHaveBeenCalledTimes(3))
     const removingProviders = optionalFiber.dispose()
     resolveApproval('allowed-once')
     await removingProviders
@@ -227,7 +277,7 @@ describe('DSH host contracts', () => {
     const tools = { register: vi.fn(() => vi.fn()) }
     const ctx = {
       tools,
-      connection: { rpc: { handle: vi.fn(() => vi.fn().mockRejectedValue(new Error('route cleanup failed'))) } },
+      connection: { fetch: { register: vi.fn(() => vi.fn().mockRejectedValue(new Error('route cleanup failed'))) } },
       webServer: { register: vi.fn(() => vi.fn()) },
       effect: vi.fn((effect: () => unknown) => {
         const disposer = effect()

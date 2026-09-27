@@ -5,6 +5,31 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import { ServerPool } from '../src/transports/server-pool'
 import type { ServerToolManager } from '../src/tool-manager'
 
+function makeConnectionHarness() {
+  const routes: Array<{ path: string; fetch: (request: Request) => Promise<Response> }> = []
+  return {
+    connection: {
+      fetch: {
+        register(route: { path: string; fetch: (request: Request) => Promise<Response> }) {
+          routes.push(route)
+          return vi.fn()
+        },
+      },
+    },
+    async call(endpoint: string, payload: unknown, signal?: AbortSignal) {
+      const route = routes.find(candidate => candidate.path === `/api/mcp-apps/${endpoint}`)
+      if (!route) throw new Error(`No route registered for ${endpoint}`)
+      const response = await route.fetch(new Request(`http://dsh.internal/api/mcp-apps/${endpoint}`, {
+        method: 'POST',
+        body: JSON.stringify({ type: 'client-request', rpcId: `rpc-${endpoint}`, method: `mcp-apps/${endpoint}`, payload }),
+        ...(signal ? { signal } : {}),
+      }))
+      if (!response.ok) throw new Error(`RPC route failed with HTTP ${response.status}`)
+      return (await response.json() as any).result
+    },
+  }
+}
+
 describe('RPC tools/call Authorization and Lifecycle', () => {
   let rpcHandler: (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<any>
   let unloadPlugin: () => Promise<void>
@@ -64,9 +89,9 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     callToolSpy = vi.spyOn(ServerPool.prototype, 'callTool').mockImplementation(async (server, name, args, signal) => ({
       content: [{ type: 'text', text: `Success: ${server}.${name}` }],
       args,
-      signal,
     }))
 
+    const connectionHarness = makeConnectionHarness()
     const mockCtx = {
       tools: {
         register: vi.fn((def: any) => {
@@ -74,12 +99,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
           return vi.fn()
         }),
       },
-      connection: {
-        rpc: { handle: vi.fn((_path: string, handler: any) => {
-          rpcHandler = handler
-          return vi.fn()
-        }) },
-      },
+      connection: connectionHarness.connection,
       effect: vi.fn((fn: () => any) => {
         unloadPlugin = fn()
         return vi.fn()
@@ -87,6 +107,8 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     }
 
     apply(mockCtx as any, config)
+
+    rpcHandler = connectionHarness.call
 
     toolManager.syncServerTools('analytics', mockClient as any, tools, config.servers.analytics)
   })
@@ -207,7 +229,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
         args: { format: 'csv' },
       },
     })
-    expect(callToolSpy).toHaveBeenCalledWith('analytics', 'export_csv', { format: 'csv' }, undefined)
+    expect(callToolSpy).toHaveBeenCalledWith('analytics', 'export_csv', { format: 'csv' }, expect.any(AbortSignal))
   })
 
   it('routes through ctx.approval.request when allowAppToolCalls is approve', async () => {
@@ -229,6 +251,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     }
 
     let secureRpcHandler: any
+    const connectionHarness = makeConnectionHarness()
     const mockCtx = {
       inject: vi.fn((services: string[], callback: (serviceCtx: Record<string, unknown>) => unknown) => {
         const service = services[0] === 'approval' ? mockApproval : mockAgents
@@ -241,18 +264,14 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
           return vi.fn()
         }),
       },
-      connection: {
-        rpc: { handle: vi.fn((_path: string, handler: any) => {
-          secureRpcHandler = handler
-          return vi.fn()
-        }) },
-      },
+      connection: connectionHarness.connection,
       effect: vi.fn((fn: () => any) => fn()),
       approval: mockApproval,
       agents: mockAgents,
     }
 
     apply(mockCtx as any, approveConfig as any)
+    secureRpcHandler = connectionHarness.call
 
     // Execute tool on secure_srv
     const secureTools: Tool[] = [
@@ -370,14 +389,16 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     }
 
     let handlerWithoutServices: any
+    const bareConnectionHarness = makeConnectionHarness()
     // Case 1: no approval or agents service
     const bareCtx = {
       inject: vi.fn(() => vi.fn()),
       tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
-      connection: { rpc: { handle: vi.fn((_p, h) => { handlerWithoutServices = h; return vi.fn() }) } },
+      connection: bareConnectionHarness.connection,
       effect: vi.fn(fn => fn()),
     }
     apply(bareCtx as any, approveConfig as any)
+    handlerWithoutServices = bareConnectionHarness.call
 
     toolManager.syncServerTools('secure_srv', mockClient as any, [
       { name: 'chart', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://sec/chart' } } },
@@ -401,6 +422,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
 
     // Case 2: agent disposed / get returns undefined
     let handlerWithDisposedAgent: any
+    const disposedAgentConnectionHarness = makeConnectionHarness()
     const ctxDisposed = {
       inject: vi.fn((services: string[], callback: (serviceCtx: Record<string, unknown>) => unknown) => {
         const service = services[0] === 'approval'
@@ -410,12 +432,13 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
         return vi.fn()
       }),
       tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
-      connection: { rpc: { handle: vi.fn((_p, h) => { handlerWithDisposedAgent = h; return vi.fn() }) } },
+      connection: disposedAgentConnectionHarness.connection,
       effect: vi.fn(fn => fn()),
       approval: { request: vi.fn() },
       agents: { get: vi.fn().mockReturnValue(undefined) },
     }
     apply(ctxDisposed as any, approveConfig as any)
+    handlerWithDisposedAgent = disposedAgentConnectionHarness.call
     toolManager.syncServerTools('secure_srv', mockClient as any, [
       { name: 'chart', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://sec/chart' } } },
       { name: 'action', inputSchema: { type: 'object' } },
@@ -463,12 +486,14 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
       },
     }
     let deniedHandler: any
+    const denyConnectionHarness = makeConnectionHarness()
     const mockCtx = {
       tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
-      connection: { rpc: { handle: vi.fn((_p, h) => { deniedHandler = h; return vi.fn() }) } },
+      connection: denyConnectionHarness.connection,
       effect: vi.fn(fn => fn()),
     }
     apply(mockCtx as any, denyConfig as any)
+    deniedHandler = denyConnectionHarness.call
 
     toolManager.syncServerTools('denied_srv', mockClient as any, [
       { name: 'chart', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://denied/chart' } } },
@@ -505,7 +530,11 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     }, ac.signal)
 
     expect(res.ok).toBe(true)
-    expect(callToolSpy).toHaveBeenCalledWith('analytics', 'export_csv', { format: 'csv' }, ac.signal)
+    const forwardedSignal = callToolSpy.mock.calls.at(-1)?.[3] as AbortSignal
+    expect(forwardedSignal).toBeInstanceOf(AbortSignal)
+    expect(forwardedSignal.aborted).toBe(false)
+    ac.abort()
+    expect(forwardedSignal.aborted).toBe(true)
   })
 
   it('disposes sessionStore when host plugin unloads', async () => {
@@ -543,7 +572,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     const response = await rpcHandler('resources/read-raw', { sessionToken, server: 'analytics', uri: 'resource://data' })
     expect(response.ok).toBe(true)
     expect(response.value).toEqual(rawResult)
-    expect(readRawSpy).toHaveBeenCalledWith('analytics', 'resource://data', undefined)
+    expect(readRawSpy).toHaveBeenCalledWith('analytics', 'resource://data', expect.any(AbortSignal))
   })
 
   describe('session-bound resource endpoints', () => {

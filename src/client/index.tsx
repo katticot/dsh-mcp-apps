@@ -55,7 +55,7 @@ export function apply(ctx: ClientContext) {
 
     inFlight = true
     try {
-      const result = await connection.rpc.call('/mcp-apps', 'tools/list-ui', null)
+      const result = await connection.rpc.call('/api', 'mcp-apps/tools/list-ui', null)
       if (!active || !result.ok || !Array.isArray(result.value)) return
 
       const currentTools = new Map<string, UiToolInfo>()

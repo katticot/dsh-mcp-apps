@@ -168,11 +168,11 @@ describe('client plugin discovery and tool view registration', () => {
     await act(async () => {
       root.render(React.createElement(view, hostProps))
     })
-    await vi.waitFor(() => expect(call).toHaveBeenCalledWith('/mcp-apps', 'resources/read', expect.anything(), expect.any(AbortSignal)))
+    await vi.waitFor(() => expect(call).toHaveBeenCalledWith('/api', 'mcp-apps/resources/read', expect.anything(), expect.any(AbortSignal)))
     await act(async () => { await Promise.resolve() })
     expect(container.querySelector('iframe')).not.toBeNull()
 
-    expect(call).toHaveBeenCalledWith('/mcp-apps', 'resources/read', {
+    expect(call).toHaveBeenCalledWith('/api', 'mcp-apps/resources/read', {
       uri: tool.resourceUri,
       server: tool.serverName,
       sessionToken: 'session-1',

@@ -65,7 +65,7 @@ describe('browser client artifact', () => {
     const pluginContext = {
       connection: {
         rpc: {
-          call: async (_channel: string, endpoint: string) => endpoint === 'tools/list-ui'
+          call: async (_channel: string, endpoint: string) => endpoint === 'mcp-apps/tools/list-ui'
             ? { ok: true, value: [{
                 publicName: 'charts_render',
                 rawName: 'render',

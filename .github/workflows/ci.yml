@@ -40,3 +40,21 @@ jobs:
 
       - name: Build plugin
         run: pnpm build
+
+      - name: Verify packed client and host artifact
+        run: pnpm test:artifact
+
+      - name: Pack candidate artifact
+        run: |
+          mkdir -p dist
+          pnpm pack --pack-destination dist
+          echo "PACKAGE_TARBALL=dist/dsh-mcp-apps-$(node -p \"require('./package.json').version\").tgz" >> "$GITHUB_ENV"
+
+      - name: Install headless browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Smoke test packed DSH artifact
+        run: |
+          for policy in allow deny approve; do
+            pnpm test:smoke "$PACKAGE_TARBALL" --policy="$policy"
+          done

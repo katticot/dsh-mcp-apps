@@ -142,6 +142,14 @@ const unregisterRpc = ctx.connection.rpc.handle('/mcp-apps', handler)
 - [ ] Add these gates to CI and before release publication. Ensure release validation tests the artifact being published, with no unverified rebuild changing its contents.
 - [ ] Update installation/configuration instructions using commands verified against the chosen release. Document the tested DSH version, required web profile, activation/restart steps, and an example that renders an app. State other releases as unverified until tested.
 
+## Runtime correction discovered during Task 6
+
+The packed plugin failed in the real DSH rc.3 profile even after Task 2: public `connection.rpc.handle` accesses `webServer` through the connection provider's Cordis shadow scope, whose declared dependency is only `credentials`. The initial real-Cordis test put connection and webServer in one provider fiber and therefore concealed this boundary.
+
+This evidence supersedes Task 2's choice of `rpc.handle` and the internal `/mcp-apps` channel. Use the public `connection.fetch.register` API for exact POST routes at `/api/mcp-apps/<endpoint>`, with client `rpc.call('/api', 'mcp-apps/<endpoint>', payload)`. A small host adapter must validate the exported `clientRequestSchema`, enforce agreement between the request method and route, preserve cancellation, and return the public server-response envelope. Keep existing endpoint payloads, session authorization, and approval policies. DSH's shared `/api` transport continues to own authentication, origin checks, and request limits.
+
+Do not use the private registration method, change another plugin's injection declaration, or take over the singleton `/api` interceptor. Add a regression with separate provider fibers, update host/client contract tests to exercise the final route API, and rerun the packed profile test. The tradeoff is maintaining a small wire adapter and changing the internal host/client URL together; user configuration and MCP app behavior stay the same.
+
 ## Completion criteria
 
 The change is ready for release review only when a clean profile installed from the package renders the fixture MCP app, delivers its tool data, executes an allowed callback, rejects denied callbacks, survives reload/reconnect, and passes the existing isolation/CSP/transport tests. Confirm the package being offered includes the fixes. Source typechecks and a successful build alone do not satisfy this goal.

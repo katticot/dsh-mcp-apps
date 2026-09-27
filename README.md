@@ -33,12 +33,12 @@ MCP servers can return more than text: the [MCP Apps](https://github.com/modelco
 - [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness) `0.1.5-rc.3` with Cordis `4.0.2`
 - The **web** profile. The plugin's client bundle is injected only when `dsh.client.platform` is `web` (see `package.json`), so its UI does not render in other profiles (e.g. `tui`, `headless`) even if the plugin is installed there.
 
-The DSH release above is the plugin's pinned compatibility candidate. Other DSH/Cordis combinations are not currently claimed as supported; see [the compatibility record](docs/dsh-compatibility.md) for the package and API contract and remaining runtime validation.
+The packed plugin has been installed and exercised in a clean DSH `0.1.5-rc.3` web profile, including iframe rendering and delivery of the fixture tool input/result. Other DSH/Cordis combinations remain unverified; see [the compatibility record](docs/dsh-compatibility.md).
 
 ## Install
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add dsh-mcp-apps
+pnpm dlx @deepseek-ai/dsh@0.1.5-rc.3 plugin --profile web add dsh-mcp-apps
 ```
 
 This forwards to `pnpm` inside your DSH **profile directory** (`$DSH_HOME/profiles/web`), not your current project — it adds `dsh-mcp-apps` to that profile's own `package.json`. Don't run a plain `pnpm add dsh-mcp-apps` in an unrelated project and expect it to do anything for DSH.
@@ -102,11 +102,13 @@ A fuller example, showing environment expansion, headers, and reverse tool-calls
 
 ## Run & verify
 
+After saving `cordis.patch.yml`, restart the web profile so the loader applies the plugin entry:
+
 ```bash
-npx @deepseek-ai/dsh web
+pnpm dlx @deepseek-ai/dsh@0.1.5-rc.3 web
 ```
 
-Call a tool on a configured server that returns a `ui://` resource. If everything is wired up, the tool result renders as a live app in the chat turn with an **Interactive App** badge, instead of raw JSON/text.
+Call a tool on a configured server that returns a `ui://` resource. Its tool input and result render in a sandboxed iframe with an **Interactive App** badge. App callbacks follow that server's `allowAppToolCalls` policy.
 
 ---
 
