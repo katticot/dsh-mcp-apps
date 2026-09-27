@@ -38,10 +38,7 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
-      - name: Build plugin
-        run: pnpm build
-
-      - name: Verify packed client and host artifact
+      - name: Build and verify client and host artifact
         run: pnpm test:artifact
 
       - name: Pack candidate artifact

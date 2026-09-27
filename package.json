@@ -59,10 +59,10 @@
   "scripts": {
     "build": "tsdown",
     "test": "vitest run",
-    "test:artifact": "vitest run --config vitest.artifact.config.ts",
+    "test:artifact": "pnpm build && vitest run --config vitest.artifact.config.ts",
     "test:smoke": "node scripts/smoke-dsh.mjs",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm test:artifact"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",

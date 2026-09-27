@@ -52,7 +52,6 @@ jobs:
         run: |
           pnpm typecheck
           pnpm test
-          pnpm build
           pnpm test:artifact
 
       - name: Pack and smoke test release artifact
