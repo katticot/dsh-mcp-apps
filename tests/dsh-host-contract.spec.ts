@@ -106,6 +106,119 @@ describe('DSH host contracts', () => {
     await cordis.registry.delete(providers)
   })
 
+  it('keeps approve mode unavailable without scoped optional services and rejects stale approval after provider removal', async () => {
+    const cordis = new Context()
+    const definitions: any[] = []
+    let rpcHandler: ((endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<any>) | undefined
+    const callTool = vi.spyOn(ServerPool.prototype, 'callTool').mockResolvedValue({ content: [{ type: 'text', text: 'executed' }] } as any)
+    const tools = {
+      register: vi.fn((definition: any) => {
+        definitions.push(definition)
+        return () => {}
+      }),
+    }
+    const connection = {
+      rpc: {
+        handle: vi.fn((_channel: string, handler: typeof rpcHandler) => {
+          rpcHandler = handler as typeof rpcHandler
+          return () => {}
+        }),
+      },
+    }
+    const hostProviders = {
+      name: 'optional-services-host',
+      apply(ctx: Context) {
+        ctx.provide('tools', tools as any)
+        ctx.provide('connection', connection as any)
+        ctx.provide('webServer', { register: vi.fn(() => () => {}) } as any)
+      },
+    }
+    const approveConfig: Config = {
+      servers: {
+        secure_srv: { transport: 'stdio', command: 'secure-srv', allowAppToolCalls: 'approve' },
+      },
+    }
+    const feature = { name: 'optional-services-feature', inject, apply: (ctx: Context) => apply(ctx, approveConfig) }
+    vi.spyOn(ServerPool.prototype, 'startAll').mockImplementation(function (this: any) {
+      this.toolManager.syncServerTools('secure_srv', { callTool: vi.fn().mockResolvedValue({ content: [{ type: 'text', text: 'chart' }] }) }, [
+        { name: 'chart', inputSchema: { type: 'object' }, _meta: { ui: { resourceUri: 'ui://secure/chart' } } },
+        { name: 'write_db', inputSchema: { type: 'object' } },
+      ], approveConfig.servers.secure_srv)
+      return Promise.resolve()
+    })
+    vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)
+
+    const hostFiber = cordis.plugin(hostProviders)
+    await hostFiber
+    const featureFiber = cordis.plugin(feature)
+    await featureFiber
+    expect(featureFiber.state).not.toBe(0)
+
+    const chart = definitions.find(definition => definition.name === 'mcp__secure_srv__chart')
+    const session = await chart.execute({}, { agent: { id: 'agent-sec' }, callId: 'call-sec' })
+    const request = (signal?: AbortSignal) => rpcHandler!('tools/call', {
+      sessionToken: session._sessionToken,
+      name: 'write_db',
+    }, signal)
+
+    expect(await request()).toEqual({
+      ok: false,
+      error: { code: 'unavailable', message: 'Approval service or agent not available for tool call approval', details: {} },
+    })
+    expect(callTool).not.toHaveBeenCalled()
+
+    let resolveApproval!: (outcome: string) => void
+    const approval = {
+      request: vi.fn().mockResolvedValue('allowed-once'),
+    }
+    const agent = { id: 'agent-sec', status: 'running' }
+    const agents = { get: vi.fn(() => agent) }
+    const optionalProviders = {
+      name: 'late-approval-providers',
+      apply(ctx: Context) {
+        ctx.provide('approval', approval as any)
+        ctx.provide('agents', agents as any)
+      },
+    }
+    const optionalFiber = cordis.plugin(optionalProviders)
+    await optionalFiber
+
+    expect(await request()).toEqual({ ok: true, value: { content: [{ type: 'text', text: 'executed' }] } })
+    expect(callTool).toHaveBeenCalledOnce()
+
+    agent.status = 'idle'
+    expect(await request()).toEqual({
+      ok: false,
+      error: { code: 'unavailable', message: 'Cannot request approval while agent "agent-sec" is idle', details: {} },
+    })
+    agent.status = 'running'
+
+    approval.request.mockResolvedValueOnce('cancelled')
+    expect(await request()).toEqual({
+      ok: false,
+      error: { code: 'cancelled', message: 'Approval request for tool "write_db" was cancelled', details: {} },
+    })
+    expect(callTool).toHaveBeenCalledOnce()
+
+    approval.request.mockImplementationOnce(() => new Promise<string>(resolve => { resolveApproval = resolve }))
+    const pending = request()
+    expect(approval.request).toHaveBeenCalledTimes(3)
+    const removingProviders = optionalFiber.dispose()
+    resolveApproval('allowed-once')
+    await removingProviders
+    expect(await pending).toEqual({
+      ok: false,
+      error: { code: 'unavailable', message: 'Approval service or agent not available for tool call approval', details: {} },
+    })
+    expect(callTool).toHaveBeenCalledOnce()
+
+    await featureFiber.dispose()
+    await hostFiber.dispose()
+    await cordis.registry.delete(feature)
+    await cordis.registry.delete(hostProviders)
+    await cordis.registry.delete(optionalProviders)
+  })
+
   it('continues cleanup when asynchronous RPC route disposal rejects', async () => {
     let unload: (() => Promise<void>) | undefined
     const stopAll = vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)

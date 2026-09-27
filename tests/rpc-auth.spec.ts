@@ -230,6 +230,11 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
 
     let secureRpcHandler: any
     const mockCtx = {
+      inject: vi.fn((services: string[], callback: (serviceCtx: Record<string, unknown>) => unknown) => {
+        const service = services[0] === 'approval' ? mockApproval : mockAgents
+        callback({ [services[0]]: service })
+        return vi.fn()
+      }),
       tools: {
         register: vi.fn((def: any) => {
           registeredToolDefs.push(def)
@@ -367,6 +372,7 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     let handlerWithoutServices: any
     // Case 1: no approval or agents service
     const bareCtx = {
+      inject: vi.fn(() => vi.fn()),
       tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
       connection: { rpc: { handle: vi.fn((_p, h) => { handlerWithoutServices = h; return vi.fn() }) } },
       effect: vi.fn(fn => fn()),
@@ -396,6 +402,13 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     // Case 2: agent disposed / get returns undefined
     let handlerWithDisposedAgent: any
     const ctxDisposed = {
+      inject: vi.fn((services: string[], callback: (serviceCtx: Record<string, unknown>) => unknown) => {
+        const service = services[0] === 'approval'
+          ? { request: vi.fn() }
+          : { get: vi.fn().mockReturnValue(undefined) }
+        callback({ [services[0]]: service })
+        return vi.fn()
+      }),
       tools: { register: vi.fn(def => { registeredToolDefs.push(def); return vi.fn() }) },
       connection: { rpc: { handle: vi.fn((_p, h) => { handlerWithDisposedAgent = h; return vi.fn() }) } },
       effect: vi.fn(fn => fn()),

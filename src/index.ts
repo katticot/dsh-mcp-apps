@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionRpcHandler, HostConnectionRpc } from '@deepseek-ai/dsh-client-connection'
-import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
+import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { ApprovalService, ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { Config } from './config'
 import { AppSessionStore } from './session-store'
@@ -22,6 +22,24 @@ declare module '@deepseek-ai/cordis' {
 
 export function apply(ctx: Context, config: Config) {
   const sessionStore = new AppSessionStore()
+  let approvalService: ApprovalService | undefined
+  let agentsService: AgentRegistry | undefined
+  if (Object.values(config.servers).some(server => server.allowAppToolCalls === 'approve')) {
+    ctx.inject(['approval'], serviceCtx => {
+      const service = serviceCtx.approval
+      approvalService = service
+      return () => {
+        if (approvalService === service) approvalService = undefined
+      }
+    })
+    ctx.inject(['agents'], serviceCtx => {
+      const service = serviceCtx.agents
+      agentsService = service
+      return () => {
+        if (agentsService === service) agentsService = undefined
+      }
+    })
+  }
   const notifyUiToolsChanged = () => {
     try {
       ctx.emit('ui-tools/changed')
@@ -120,20 +138,11 @@ export function apply(ctx: Context, config: Config) {
 
               const serverConfig = config.servers[session.serverName]
               if (serverConfig?.allowAppToolCalls === 'approve') {
-                // `approval`/`agents` aren't in this plugin's `inject` list (they're
-                // optional services), so direct property access on `ctx` may not see
-                // them if their providing fiber isn't active in this scope. `ctx.get`
-                // (typed by cordis's own `ReflectService` augmentation — see
-                // node_modules/@deepseek-ai/cordis lib/types/reflect.d.ts) performs the
-                // same non-strict service lookup without requiring an `inject` entry.
-                // The `typeof` guard (not a cast — `ctx.get` is fully typed) keeps this
-                // working against minimal host/test `Context` stand-ins that don't
-                // implement the full cordis reflection surface.
-                const approvalService = ctx.approval ?? (typeof ctx.get === 'function' ? ctx.get('approval') : undefined)
-                const agentsService = ctx.agents ?? (typeof ctx.get === 'function' ? ctx.get('agents') : undefined)
-                const agent = session.agentId && agentsService ? agentsService.get(session.agentId) : undefined
+                const currentApproval = approvalService
+                const currentAgents = agentsService
+                const agent = session.agentId && currentAgents ? currentAgents.get(session.agentId) : undefined
 
-                if (!approvalService || !agent) {
+                if (!currentApproval || !currentAgents || !agent) {
                   return failure('unavailable', 'Approval service or agent not available for tool call approval')
                 }
 
@@ -142,13 +151,16 @@ export function apply(ctx: Context, config: Config) {
                 }
 
                 try {
-                  const outcome: ApprovalOutcome = await approvalService.request({
+                  const outcome: ApprovalOutcome = await currentApproval.request({
                     agent,
                     toolName,
                     callId: session.callId,
                     reason: `MCP App requested execution of tool "${toolName}"`,
                     signal,
                   })
+                  if (approvalService !== currentApproval || agentsService !== currentAgents) {
+                    return failure('unavailable', 'Approval service or agent not available for tool call approval')
+                  }
                   if (outcome !== 'allowed-once') {
                     if (outcome === 'unavailable') {
                       return failure('unavailable', `Approval service is unavailable for tool "${toolName}"`)
