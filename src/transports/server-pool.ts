@@ -23,6 +23,37 @@ export interface ResourceResponse {
 export const MAX_TOOLS_PER_SERVER = 256
 export const MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
 
+/**
+ * Byte length a base64 string decodes to, computed from the encoded string
+ * itself (each 4 base64 chars encode 3 bytes, minus 1 byte per trailing `=`
+ * padding char) rather than by actually decoding it. Lets callers enforce a
+ * size cap on a blob without allocating a full decoded copy just to measure
+ * it.
+ */
+function base64DecodedByteLength(base64: string): number {
+  const len = base64.length
+  if (len === 0) return 0
+  let padding = 0
+  if (base64.endsWith('==')) padding = 2
+  else if (base64.endsWith('=')) padding = 1
+  return Math.floor((len * 3) / 4) - padding
+}
+
+/** Byte size of one resource content item: UTF-8 bytes for text, decoded-without-decoding bytes for a blob. */
+function resourceContentByteSize(content: unknown): number {
+  if (content && typeof content === 'object') {
+    const c = content as { text?: unknown; blob?: unknown }
+    if (typeof c.text === 'string') return Buffer.byteLength(c.text, 'utf8')
+    if (typeof c.blob === 'string') return base64DecodedByteLength(c.blob)
+  }
+  return 0
+}
+
+/** Total byte size across every content item of a resource read result. */
+function totalResourceContentBytes(contents: readonly unknown[]): number {
+  return contents.reduce((sum: number, c) => sum + resourceContentByteSize(c), 0)
+}
+
 export class ServerPool {
   private ctx: Context
   private config: Config
@@ -164,67 +195,42 @@ export class ServerPool {
   }
 
 
-  async listResources(serverName?: string): Promise<unknown> {
-    if (serverName) {
-      const instance = this.servers.get(serverName)
-      if (!instance) throw new Error(`MCP server "${serverName}" is not connected`)
-      return instance.client.listResources()
-    }
-    const allResources: unknown[] = []
-    for (const [name, instance] of this.servers.entries()) {
-      try {
-        const res = await instance.client.listResources()
-        allResources.push(...(res.resources ?? []))
-      } catch {
-        // ignore
-      }
-    }
-    return { resources: allResources }
+  async listResources(serverName: string): Promise<unknown> {
+    const instance = this.servers.get(serverName)
+    if (!instance) throw new Error(`MCP server "${serverName}" is not connected`)
+    return instance.client.listResources()
   }
 
-  async readResourceRaw(serverName?: string, uri?: string, signal?: AbortSignal): Promise<unknown> {
+  async readResourceRaw(serverName: string, uri?: string, signal?: AbortSignal): Promise<unknown> {
     if (!uri) throw new Error('Missing resource URI')
 
-    let targetServer = serverName
-    if (!targetServer) {
-      const uiTool = this.getUiToolsSnapshot().find(t => t.resourceUri === uri)
-      targetServer = uiTool?.serverName
-    }
-
-    if (!targetServer) {
-      throw new Error(`Cannot locate MCP server for resource URI: ${uri}`)
-    }
-
-    const instance = this.servers.get(targetServer)
+    const instance = this.servers.get(serverName)
     if (!instance) {
-      throw new Error(`MCP server "${targetServer}" is not connected`)
+      throw new Error(`MCP server "${serverName}" is not connected`)
     }
 
-    const serverConfig = this.config.servers[targetServer]
+    const serverConfig = this.config.servers[serverName]
     const timeout = resolveToolCallTimeoutMs(serverConfig, this.config.defaultTimeoutMs)
-    return instance.client.readResource({ uri }, { timeout, signal })
+    const response = await instance.client.readResource({ uri }, { timeout, signal })
+
+    const contents = (response as { contents?: unknown[] }).contents ?? []
+    const totalBytes = totalResourceContentBytes(contents)
+    if (totalBytes > MAX_RESOURCE_SIZE_BYTES) {
+      throw new Error(`Resource ${uri} exceeded maximum allowed size of 10MB`)
+    }
+
+    return response
   }
 
-  async readResource(serverName?: string, uri?: string, signal?: AbortSignal): Promise<ResourceResponse> {
+  async readResource(serverName: string, uri?: string, signal?: AbortSignal): Promise<ResourceResponse> {
     if (!uri) throw new Error('Missing resource URI')
 
-    // If serverName is omitted, look up server owning this resource
-    let targetServer = serverName
-    if (!targetServer) {
-      const uiTool = this.getUiToolsSnapshot().find(t => t.resourceUri === uri)
-      targetServer = uiTool?.serverName
-    }
-
-    if (!targetServer) {
-      throw new Error(`Cannot locate MCP server for resource URI: ${uri}`)
-    }
-
-    const instance = this.servers.get(targetServer)
+    const instance = this.servers.get(serverName)
     if (!instance) {
-      throw new Error(`MCP server "${targetServer}" is not connected`)
+      throw new Error(`MCP server "${serverName}" is not connected`)
     }
 
-    const serverConfig = this.config.servers[targetServer]
+    const serverConfig = this.config.servers[serverName]
     const timeout = resolveToolCallTimeoutMs(serverConfig, this.config.defaultTimeoutMs)
     const response = await instance.client.readResource({ uri }, { timeout, signal })
     if (!response.contents || response.contents.length === 0) {
@@ -239,6 +245,17 @@ export class ServerPool {
              ('blob' in c && typeof c.blob === 'string')
     }) ?? response.contents[0]
 
+    if (!('text' in item && typeof item.text === 'string') && !('blob' in item && typeof item.blob === 'string')) {
+      throw new Error(`Resource ${uri} returned neither text nor blob HTML`)
+    }
+
+    // Measure before decoding: for a blob this is computed from the base64
+    // length alone, so an oversized item is rejected without allocating a
+    // full decoded copy just to measure it.
+    if (resourceContentByteSize(item) > MAX_RESOURCE_SIZE_BYTES) {
+      throw new Error(`Resource ${uri} exceeded maximum allowed size of 10MB`)
+    }
+
     let html: string | undefined
     if ('text' in item && typeof item.text === 'string') {
       html = item.text
@@ -248,10 +265,6 @@ export class ServerPool {
 
     if (!html) {
       throw new Error(`Resource ${uri} returned neither text nor blob HTML`)
-    }
-
-    if (html.length > MAX_RESOURCE_SIZE_BYTES) {
-      throw new Error(`Resource ${uri} exceeded maximum allowed size of 10MB`)
     }
 
     const meta = (item as { _meta?: unknown; meta?: unknown })._meta ?? (item as { meta?: unknown }).meta

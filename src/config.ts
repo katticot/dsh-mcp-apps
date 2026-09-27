@@ -1,4 +1,5 @@
 import Schema from '@deepseek-ai/schemastery'
+import { DEFAULT_MAX_MESSAGE_BYTES } from './constants'
 
 const REMOTE_URL_PATTERN = /^https?:\/\/\S+$/
 
@@ -23,6 +24,8 @@ export interface StdioServerConfig {
   allowedPermissions?: string[]
   /** Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read. */
   allowedVars?: string[]
+  /** Maximum size in bytes of a single incoming stdio message (bytes buffered since the last newline). Default 16MB. */
+  maxMessageBytes?: number
 }
 
 export interface RemoteServerConfig {
@@ -71,6 +74,7 @@ const StdioSchema: Schema<StdioServerConfig> = Schema.object({
   allowAppToolCalls: AppToolCallsSchema,
   allowedPermissions: Schema.array(String).default([]),
   allowedVars: Schema.array(String).default([]),
+  maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES),
 })
 
 const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
@@ -85,7 +89,7 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   allowAppToolCalls: AppToolCallsSchema,
   allowedPermissions: Schema.array(String).default([]),
   allowedVars: Schema.array(String).default([]),
-  maxMessageBytes: Schema.number().min(1).default(16 * 1024 * 1024),
+  maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES),
 })
 
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 30000

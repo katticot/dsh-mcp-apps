@@ -168,6 +168,81 @@ describe('ServerPool Lifecycle', () => {
     expect(res).toBe(rawResult)
   })
 
+  it('readResourceRaw rejects when total content size exceeds MAX_RESOURCE_SIZE_BYTES', async () => {
+    // Just over the 10MB cap; split across two content items to prove the
+    // check sums bytes across *all* contents, not just the first one.
+    const half = 'a'.repeat(5 * 1024 * 1024 + 1)
+    const mockClient = {
+      readResource: vi.fn().mockResolvedValue({
+        contents: [
+          { uri: 'resource://1', text: half },
+          { uri: 'resource://2', text: half },
+        ],
+      }),
+    }
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd' } },
+    }, { getUiToolsSnapshot: () => [] } as any)
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport: vi.fn() })
+
+    await expect(pool.readResourceRaw('srv', 'resource://1')).rejects.toThrow(/exceeded maximum/i)
+  })
+
+  it('readResourceRaw allows total content size within MAX_RESOURCE_SIZE_BYTES, counting a blob by decoded bytes', async () => {
+    // A base64 blob decodes to 3/4 of its encoded length; use a blob well
+    // under the cap alongside modest text so the sum stays under 10MB.
+    const blob = Buffer.alloc(1024, 'x').toString('base64')
+    const rawResult = {
+      contents: [
+        { uri: 'resource://1', text: 'small text' },
+        { uri: 'resource://2', blob },
+      ],
+    }
+    const mockClient = { readResource: vi.fn().mockResolvedValue(rawResult) }
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd' } },
+    }, { getUiToolsSnapshot: () => [] } as any)
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport: vi.fn() })
+
+    const res = await pool.readResourceRaw('srv', 'resource://1')
+    expect(res).toBe(rawResult)
+  })
+
+  it('readResource rejects an oversized blob without fully decoding it just to measure it', async () => {
+    // ~13.4MB of base64 decodes to just over 10MB. If the implementation
+    // measured size by fully decoding to a UTF-8 string first (the old
+    // behavior), this would still be caught, but a non-UTF-8-safe blob would
+    // not be; measuring from the base64 length avoids decoding at all.
+    const oversizedBlob = Buffer.alloc(10 * 1024 * 1024 + 1024, 1).toString('base64')
+    const mockClient = {
+      readResource: vi.fn().mockResolvedValue({
+        contents: [{ uri: 'ui://srv/app', blob: oversizedBlob, mimeType: 'text/html' }],
+      }),
+    }
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd' } },
+    }, { getUiToolsSnapshot: () => [{ resourceUri: 'ui://srv/app', serverName: 'srv' }] } as any)
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport: vi.fn() })
+
+    await expect(pool.readResource('srv', 'ui://srv/app')).rejects.toThrow(/exceeded maximum/i)
+  })
+
+  it('readResource accepts a blob within the cap', async () => {
+    const blob = Buffer.from('<div>hi</div>', 'utf8').toString('base64')
+    const mockClient = {
+      readResource: vi.fn().mockResolvedValue({
+        contents: [{ uri: 'ui://srv/app', blob, mimeType: 'text/html' }],
+      }),
+    }
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd' } },
+    }, { getUiToolsSnapshot: () => [{ resourceUri: 'ui://srv/app', serverName: 'srv' }] } as any)
+    ;(pool as any).servers.set('srv', { client: mockClient, disposeTransport: vi.fn() })
+
+    const res = await pool.readResource('srv', 'ui://srv/app')
+    expect(res.html).toBe('<div>hi</div>')
+  })
+
   it('discards a zombie refreshTools resolution after stopAll', async () => {
     const syncSpy = vi.fn()
     const mockToolManager = { syncServerTools: syncSpy, evictServer: vi.fn(), getUiToolsSnapshot: () => [] } as any

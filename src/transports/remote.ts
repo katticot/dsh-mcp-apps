@@ -2,8 +2,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { FetchLike, Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { expandEnvVars, type RemoteServerConfig } from '../config'
+import { DEFAULT_MAX_MESSAGE_BYTES } from '../constants'
 
-export const DEFAULT_MAX_MESSAGE_BYTES = 16 * 1024 * 1024 // 16 MB
+export { DEFAULT_MAX_MESSAGE_BYTES }
 
 const LF = 0x0a
 const CR = 0x0d
