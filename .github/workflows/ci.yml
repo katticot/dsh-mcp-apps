@@ -45,7 +45,7 @@ jobs:
         run: |
           mkdir -p dist
           pnpm pack --pack-destination dist
-          echo "PACKAGE_TARBALL=dist/dsh-mcp-apps-$(node -p \"require('./package.json').version\").tgz" >> "$GITHUB_ENV"
+          echo "PACKAGE_TARBALL=dist/dsh-mcp-apps-$(node -p "require('./package.json').version").tgz" >> "$GITHUB_ENV"
 
       - name: Install headless browser
         run: pnpm exec playwright install --with-deps chromium
