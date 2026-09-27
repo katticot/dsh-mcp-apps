@@ -1,33 +1,62 @@
 import React from 'react'
-import { McpAppToolView, type ClientConnectionRpc, type McpAppToolViewProps, type UiToolInfo } from './McpAppToolView'
+import type { Context } from '@deepseek-ai/cordis'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
+import { McpAppToolView, type UiToolInfo } from './McpAppToolView'
 
 export const inject = ['connection', 'slots']
 
-export type ToolViewSlotProps = Omit<McpAppToolViewProps, 'tool' | 'connection'>
+export type ToolViewSlotProps = ToolCallViewProps
 
-interface ClientContext {
-  connection: ClientConnectionRpc
-  slots: {
-    inject: (name: string, callback: () => () => void) => () => void
-    register: (descriptor: { name: string; key: string }, component: (props: ToolViewSlotProps) => React.ReactElement) => () => void
-  }
-  effect: (callback: () => void | (() => void), name?: string) => void
-  on?: (event: string, listener: (...args: unknown[]) => void) => () => void
+interface ClientSlots {
+  inject: (name: string, callback: () => () => void) => () => void
+  register: (
+    descriptor: { name: string; key: string },
+    component: (props: ToolCallViewProps) => React.ReactElement
+  ) => () => void
 }
+
+type ClientContext = Pick<Context, 'effect'> & {
+  connection: ConnectionHandle
+  slots: ClientSlots
+}
+
+interface RegisteredView {
+  fingerprint: string
+  dispose: () => void
+}
+
+const DISCOVERY_INTERVAL_MS = 5_000
 
 export function apply(ctx: ClientContext) {
   const connection = ctx.connection
-  const viewDisposers = new Map<string, () => void>()
+  const registeredViews = new Map<string, RegisteredView>()
+  let active = true
+  let inFlight = false
+  let discoveryRequested = false
 
-  const syncTools = async () => {
+  const unregisterView = (name: string) => {
+    const view = registeredViews.get(name)
+    if (!view) return
+    try {
+      view.dispose()
+    } catch {
+      // A view may already have been retired by its slot owner.
+    }
+    registeredViews.delete(name)
+  }
+
+  const syncTools = async (retryAfterInFlight = false) => {
+    if (!active) return
+    if (inFlight) {
+      if (retryAfterInFlight) discoveryRequested = true
+      return
+    }
+
+    inFlight = true
     try {
       const result = await connection.rpc.call('/mcp-apps', 'tools/list-ui', null)
-      if (!result.ok) {
-        console.warn('mcp-apps: failed to fetch UI tools from host:', result.error.message)
-        return
-      }
-
-      if (!Array.isArray(result.value)) return
+      if (!active || !result.ok || !Array.isArray(result.value)) return
 
       const currentTools = new Map<string, UiToolInfo>()
       for (const candidate of result.value) {
@@ -35,84 +64,64 @@ export function apply(ctx: ClientContext) {
         if (tool) currentTools.set(tool.publicName, tool)
       }
 
-      // Unregister views for tools that are no longer present
-      for (const [name, disposer] of viewDisposers.entries()) {
-        if (!currentTools.has(name)) {
-          try {
-            disposer()
-          } catch {
-            // Ignored
-          }
-          viewDisposers.delete(name)
-        }
+      for (const name of registeredViews.keys()) {
+        if (!currentTools.has(name)) unregisterView(name)
       }
 
-      // Register views for newly discovered tools
-      for (const [name, tool] of currentTools.entries()) {
-        if (viewDisposers.has(name)) continue
+      for (const [name, tool] of currentTools) {
+        const fingerprint = JSON.stringify([tool.rawName, tool.resourceUri, tool.serverName])
+        const registered = registeredViews.get(name)
+        if (registered?.fingerprint === fingerprint) continue
+        if (registered) unregisterView(name)
 
-        let unregisterSlot: (() => void) | undefined
-        ctx.effect(() => {
-          unregisterSlot = ctx.slots.inject('tool.call.toolview', () => {
-            return ctx.slots.register({
-              name: 'tool.call.toolview',
-              key: tool.publicName,
-            }, (props: ToolViewSlotProps) => (
-              <McpAppToolView
-                {...props}
-                tool={tool}
-                connection={connection}
-              />
-            ))
-          })
-          return unregisterSlot
-        }, `mcp-apps: ${tool.publicName} view`)
+        const dispose = ctx.effect(() => ctx.slots.inject('tool.call.toolview', () => {
+          return ctx.slots.register({
+            name: 'tool.call.toolview',
+            key: tool.publicName,
+          }, (props: ToolCallViewProps) => (
+            <McpAppToolView
+              {...props}
+              tool={tool}
+              connection={connection}
+            />
+          ))
+        }), `mcp-apps: ${tool.publicName} view`)
 
-        if (unregisterSlot) {
-          viewDisposers.set(name, unregisterSlot)
-        } else {
-          viewDisposers.set(name, () => {})
-        }
+        registeredViews.set(name, { fingerprint, dispose })
       }
     } catch (err) {
-      console.error('mcp-apps: client initialization error:', err)
-    }
-  }
-
-  void syncTools()
-
-  // Host-pushed ui-tools/changed event and connection reset listeners
-  let unlistenReset: (() => void) | undefined
-  let unlistenChanged: (() => void) | undefined
-
-  if (typeof ctx.on === 'function') {
-    unlistenReset = ctx.on('connection/reset', () => {
-      void syncTools()
-    })
-    unlistenChanged = ctx.on('ui-tools/changed', () => {
-      void syncTools()
-    })
-  }
-
-  // Safety retries for delayed server connections
-  const t1 = setTimeout(() => { void syncTools() }, 3000)
-  const t2 = setTimeout(() => { void syncTools() }, 8000)
-
-  // Disposer on client plugin unload
-  return () => {
-    clearTimeout(t1)
-    clearTimeout(t2)
-    unlistenReset?.()
-    unlistenChanged?.()
-    for (const disposer of viewDisposers.values()) {
-      try {
-        disposer()
-      } catch {
-        // Ignored
+      if (active) console.error('mcp-apps: client initialization error:', err)
+    } finally {
+      inFlight = false
+      if (active && discoveryRequested) {
+        discoveryRequested = false
+        void syncTools()
       }
     }
-    viewDisposers.clear()
   }
+
+  // The public generation observer covers first readiness and reconnects. A
+  // bounded poll discovers server additions/removals because the host event
+  // bus is not transported into the browser runtime.
+  void syncTools()
+  const unlistenGeneration = connection.generation.subscribe(() => {
+    void syncTools(true)
+  })
+  const interval = setInterval(() => {
+    void syncTools()
+  }, DISCOVERY_INTERVAL_MS)
+
+  const dispose = () => {
+    if (!active) return
+    active = false
+    discoveryRequested = false
+    clearInterval(interval)
+    unlistenGeneration()
+    for (const name of registeredViews.keys()) unregisterView(name)
+    registeredViews.clear()
+  }
+
+  return ctx.effect(() => dispose, 'mcp-apps: UI tool discovery')
 }
 
 function parseUiTool(value: unknown): UiToolInfo | null {
