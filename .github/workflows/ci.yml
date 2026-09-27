@@ -56,5 +56,10 @@ jobs:
             pnpm test:smoke "$PACKAGE_TARBALL" --policy="$policy"
           done
 
+      - name: Install npm with OIDC trusted-publishing support
+        run: |
+          npm install -g npm@11.20.0
+          npm --version
+
       - name: Guard against npm publish tarball path misparse
         run: npm publish "./$PACKAGE_TARBALL" --dry-run --ignore-scripts

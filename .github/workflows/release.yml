@@ -65,5 +65,10 @@ jobs:
             pnpm test:smoke "$PACKAGE_TARBALL" --policy="$policy"
           done
 
+      - name: Install npm with OIDC trusted-publishing support
+        run: |
+          npm install -g npm@11.20.0
+          npm --version
+
       - name: Publish the verified tarball to NPM
         run: npm publish "$PACKAGE_TARBALL" --access public --provenance --ignore-scripts
