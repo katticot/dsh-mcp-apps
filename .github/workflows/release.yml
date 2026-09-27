@@ -58,7 +58,7 @@ jobs:
         run: |
           mkdir -p dist
           pnpm pack --pack-destination dist
-          PACKAGE_TARBALL="dist/dsh-mcp-apps-$(node -p "require('./package.json').version").tgz"
+          PACKAGE_TARBALL="./dist/dsh-mcp-apps-$(node -p "require('./package.json').version").tgz"
           echo "PACKAGE_TARBALL=$PACKAGE_TARBALL" >> "$GITHUB_ENV"
           pnpm exec playwright install --with-deps chromium
           for policy in allow deny approve; do
