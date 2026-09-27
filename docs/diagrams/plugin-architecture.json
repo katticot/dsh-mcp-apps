@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "How dsh-mcp-apps works",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1210,
+      550
+    ]
+  },
+  "components": [
+    {
+      "id": "chat",
+      "type": "frontend",
+      "label": "DSH chat",
+      "sublabel": "Agent tool calls + result rows",
+      "pos": [
+        60,
+        70
+      ],
+      "size": [
+        260,
+        80
+      ]
+    },
+    {
+      "id": "view",
+      "type": "frontend",
+      "label": "McpAppToolView",
+      "sublabel": "Host React + AppBridge",
+      "pos": [
+        475,
+        70
+      ],
+      "size": [
+        260,
+        80
+      ]
+    },
+    {
+      "id": "iframe",
+      "type": "frontend",
+      "label": "Sandboxed app",
+      "sublabel": "HTML in iframe srcDoc + CSP",
+      "pos": [
+        890,
+        70
+      ],
+      "size": [
+        260,
+        80
+      ]
+    },
+    {
+      "id": "manager",
+      "type": "backend",
+      "label": "ServerToolManager",
+      "sublabel": "Names, visibility, UI metadata",
+      "pos": [
+        60,
+        245
+      ],
+      "size": [
+        260,
+        80
+      ]
+    },
+    {
+      "id": "rpc",
+      "type": "backend",
+      "label": "Host RPC routes",
+      "sublabel": "/api/mcp-apps/*",
+      "pos": [
+        475,
+        245
+      ],
+      "size": [
+        260,
+        80
+      ]
+    },
+    {
+      "id": "session",
+      "type": "security",
+      "label": "Session + policy",
+      "sublabel": "AppSessionStore / approval",
+      "pos": [
+        890,
+        245
+      ],
+      "size": [
+        260,
+        80
+      ]
+    },
+    {
+      "id": "pool",
+      "type": "backend",
+      "label": "ServerPool",
+      "sublabel": "Connections + reconnects",
+      "pos": [
+        60,
+        420
+      ],
+      "size": [
+        260,
+        80
+      ]
+    },
+    {
+      "id": "servers",
+      "type": "external",
+      "label": "MCP servers",
+      "sublabel": "Tools + ui:// HTML resources",
+      "pos": [
+        475,
+        420
+      ],
+      "size": [
+        260,
+        80
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "DSH browser",
+      "wraps": [
+        "chat",
+        "view",
+        "iframe"
+      ],
+      "pad": 30
+    },
+    {
+      "kind": "region",
+      "label": "DSH host plugin (Node.js)",
+      "wraps": [
+        "manager",
+        "rpc",
+        "session"
+      ],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {
+      "from": "chat",
+      "to": "view",
+      "label": "Keyed toolview",
+      "variant": "emphasis"
+    },
+    {
+      "from": "view",
+      "to": "iframe",
+      "label": "postMessage",
+      "variant": "emphasis"
+    },
+    {
+      "from": "chat",
+      "to": "manager",
+      "label": "Execute tool",
+      "labelAt": [
+        190,
+        196
+      ]
+    },
+    {
+      "from": "view",
+      "to": "rpc",
+      "label": "Connection RPC",
+      "variant": "emphasis",
+      "labelAt": [
+        605,
+        196
+      ]
+    },
+    {
+      "from": "rpc",
+      "to": "session",
+      "label": "Authorize",
+      "variant": "security"
+    },
+    {
+      "from": "manager",
+      "to": "pool",
+      "label": "Discover tools",
+      "labelAt": [
+        190,
+        371
+      ]
+    },
+    {
+      "from": "rpc",
+      "to": "servers",
+      "label": "Via ServerPool",
+      "labelAt": [
+        605,
+        371
+      ]
+    },
+    {
+      "from": "pool",
+      "to": "servers",
+      "label": "MCP transport"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "1 \u00b7 Discover and execute",
+      "items": [
+        "Registers model-visible tools; app-only tools stay hidden.",
+        "Results include UI URI, result data and a session token."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "2 \u00b7 Mount and initialize",
+      "items": [
+        "Discovers UI tools on reconnect and every 5 seconds.",
+        "Reads HTML, attaches AppBridge, sets srcDoc, then sends tool input/result after initialization."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "3 \u00b7 Handle app callbacks",
+      "items": [
+        "AppBridge relays app requests via host RPC.",
+        "Session, server and tool scope plus deny / approve / allow policy gate reverse tool calls."
+      ]
+    }
+  ]
+}
