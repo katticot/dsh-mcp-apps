@@ -71,13 +71,13 @@
     "zod": "^4.6.5"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-client-connection": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-client-ui-tool": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-subprocess": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-user-approval": "0.1.5-rc.3"
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-connection": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-tool": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-subprocess": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-user-approval": "^0.1.7-rc.2"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-agent": {
@@ -88,14 +88,14 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-client-connection": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-client-ui-tool": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-llm-mock-server": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-subprocess": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-user-approval": "0.1.5-rc.3",
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-agent": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-tool": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-llm-mock-server": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-subprocess": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.1.7-rc.2",
     "@playwright/test": "1.57.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^22.15.0",
