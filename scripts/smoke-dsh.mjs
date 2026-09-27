@@ -84,6 +84,13 @@ function startDsh(port) {
       DSH_TELEMETRY_DISABLED: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
+    // Own process group: `pnpm dlx` spawns the actual dsh process as its own
+    // child, which in turn spawns the stdio MCP fixture as its own child.
+    // Signaling only the `pnpm dlx` PID (the default) never reaches those
+    // descendants unless pnpm itself forwards the signal — sending to the
+    // whole negative-PID process group does, regardless of how many layers
+    // of wrapper processes sit in between.
+    detached: true,
   })
   for (const stream of [dsh.stdout, dsh.stderr]) {
     stream.on('data', chunk => {
@@ -146,9 +153,9 @@ async function cleanup() {
   cleanupComplete = true
   await browser?.close().catch(() => {})
   if (dsh && dsh.exitCode === null) {
-    dsh.kill('SIGTERM')
+    killDshTree('SIGTERM')
     await Promise.race([new Promise(resolve => dsh.once('exit', resolve)), delay(8_000)])
-    if (dsh.exitCode === null) dsh.kill('SIGKILL')
+    if (dsh.exitCode === null) killDshTree('SIGKILL')
   }
   await mock?.close().catch(() => {})
   for (const event of await readEvents()) if (event.type === 'ready' && Number.isInteger(event.pid)) fixturePids.add(event.pid)
@@ -169,15 +176,23 @@ async function stopFixture(pid) {
   while (Date.now() < killDeadline && ownedProcess()) await delay(100)
   if (ownedProcess()) throw new Error(`Fixture process ${pid} remained alive after cleanup`)
 }
+function killDshTree(signal) {
+  // `dsh` was spawned detached (its own process group leader): signaling the
+  // negative PID reaches the whole tree — pnpm dlx, the actual dsh process
+  // it spawns, and the stdio MCP fixture dsh spawns in turn — regardless of
+  // whether any layer in between forwards the signal itself. Fall back to a
+  // plain kill of the tracked PID if the process group is already gone.
+  try { process.kill(-dsh.pid, signal) } catch { dsh.kill(signal) }
+}
 async function stopDsh() {
   if (!dsh || dsh.exitCode !== null) return
   const pid = (await readEvents()).find(event => event.type === 'ready')?.pid
-  dsh.kill('SIGTERM')
+  killDshTree('SIGTERM')
   // Generous margins here: shared, slower CI runners take noticeably longer
   // than a fast local machine to flush the stdio fixture's shutdown event
   // and let the DSH process exit after SIGTERM.
   await Promise.race([new Promise(resolve => dsh.once('exit', resolve)), delay(20_000)])
-  if (dsh.exitCode === null) dsh.kill('SIGKILL')
+  if (dsh.exitCode === null) killDshTree('SIGKILL')
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
     const events = await readEvents()
