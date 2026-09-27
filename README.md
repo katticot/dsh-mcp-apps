@@ -5,7 +5,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.3-61dafb.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Cordis](https://img.shields.io/badge/Cordis-v4.0-7952b3.svg?style=flat-square)](https://cordis.moe/)
-[![Tests](https://github.com/katticot/dsh-mcp-apps/actions/workflows/ci.yml/badge.svg)](https://github.com/katticot/dsh-mcp-apps/actions/workflows/ci.yml)
+[![CI](https://github.com/katticot/dsh-mcp-apps/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/katticot/dsh-mcp-apps/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
 **Renders MCP Apps as sandboxed interactive iframes in [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) web chat.**
