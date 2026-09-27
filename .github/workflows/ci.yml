@@ -62,4 +62,19 @@ jobs:
           npm --version
 
       - name: Guard against npm publish tarball path misparse
-        run: npm publish "./$PACKAGE_TARBALL" --dry-run --ignore-scripts
+        run: |
+          set -euo pipefail
+          # Re-pack the already-verified tarball under a throwaway, never-published
+          # prerelease version so the dry-run publish doesn't fail once the real
+          # version has been published to the registry (see run 36349424582).
+          # The point of this guard is the argument SHAPE ("./<tarball>"), which is
+          # what defeats npm-package-arg treating a bare `dist/x.tgz` as a
+          # git/hosted-shorthand reference - not the specific version being dry-run
+          # published.
+          GUARD_DIR="$(mktemp -d)"
+          tar -xzf "$PACKAGE_TARBALL" -C "$GUARD_DIR"
+          GUARD_VERSION="0.0.0-ci.${GITHUB_SHA::12}"
+          (cd "$GUARD_DIR/package" && npm pkg set version="$GUARD_VERSION")
+          (cd "$GUARD_DIR/package" && npm pack --pack-destination "$GUARD_DIR")
+          GUARD_TARBALL="$(basename "$(ls -t "$GUARD_DIR"/*.tgz | head -n1)")"
+          (cd "$GUARD_DIR" && npm publish "./$GUARD_TARBALL" --dry-run --ignore-scripts --tag ci)
