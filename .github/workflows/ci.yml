@@ -55,3 +55,6 @@ jobs:
           for policy in allow deny approve; do
             pnpm test:smoke "$PACKAGE_TARBALL" --policy="$policy"
           done
+
+      - name: Guard against npm publish tarball path misparse
+        run: npm publish "./$PACKAGE_TARBALL" --dry-run --ignore-scripts
