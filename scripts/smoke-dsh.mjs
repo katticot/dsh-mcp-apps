@@ -73,7 +73,7 @@ async function appendPluginConfig(defaultTimeoutMs = 30_000) {
 }
 function startDsh(port) {
   const output = createWriteStream(dshLogs, { flags: 'a' })
-  dsh = spawn('pnpm', ['dlx', '@deepseek-ai/dsh@0.1.5-rc.3', 'web', '--no-open', '--port', String(port)], {
+  dsh = spawn('pnpm', ['dlx', '@deepseek-ai/dsh@0.1.7-rc.2', 'web', '--no-open', '--port', String(port)], {
     cwd: work,
     env: {
       ...process.env,
@@ -185,10 +185,10 @@ try {
   })
 
   const installEnv = { ...process.env, DSH_HOME: dshHome }
-  run('pnpm', ['dlx', '@deepseek-ai/dsh@0.1.5-rc.3', 'plugin', '--profile', 'web', 'add', tarball], { env: installEnv })
-  run('pnpm', ['dlx', '@deepseek-ai/dsh@0.1.5-rc.3', 'plugin', '--profile', 'web', 'add', seedPluginDirectory], { env: installEnv })
+  run('pnpm', ['dlx', '@deepseek-ai/dsh@0.1.7-rc.2', 'plugin', '--profile', 'web', 'add', tarball], { env: installEnv })
+  run('pnpm', ['dlx', '@deepseek-ai/dsh@0.1.7-rc.2', 'plugin', '--profile', 'web', 'add', seedPluginDirectory], { env: installEnv })
   await appendPluginConfig()
-  const configDump = spawnSync('pnpm', ['dlx', '@deepseek-ai/dsh@0.1.5-rc.3', '--profile', 'web', '--dump-config'], {
+  const configDump = spawnSync('pnpm', ['dlx', '@deepseek-ai/dsh@0.1.7-rc.2', '--profile', 'web', '--dump-config'], {
     cwd: work, env: installEnv, encoding: 'utf8',
   })
   if (configDump.status !== 0) throw new Error(`DSH --dump-config failed: ${configDump.stderr}`)
@@ -415,7 +415,7 @@ try {
 
   console.log(JSON.stringify({
     result: 'passed',
-    dshVersion: '0.1.5-rc.3',
+    dshVersion: '0.1.7-rc.2',
     policy,
     installedPackagePath,
     fixtureEvents: await readEvents(),

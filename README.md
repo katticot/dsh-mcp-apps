@@ -30,15 +30,15 @@ MCP servers can return more than text: the [MCP Apps](https://github.com/modelco
 ## Requirements
 
 - Node.js >= 22
-- [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness) `0.1.5-rc.3` with Cordis `4.0.2`
+- [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness) `0.1.7-rc.2` with Cordis `~4.0.4`
 - The **web** profile. The plugin's client bundle is injected only when `dsh.client.platform` is `web` (see `package.json`), so its UI does not render in other profiles (e.g. `tui`, `headless`) even if the plugin is installed there.
 
-The packed plugin has been installed and exercised in a clean DSH `0.1.5-rc.3` web profile, including iframe rendering and delivery of the fixture tool input/result. Other DSH/Cordis combinations remain unverified; see [the compatibility record](docs/dsh-compatibility.md).
+The packed plugin has been installed and exercised in a clean DSH `0.1.7-rc.2` web profile, including iframe rendering and delivery of the fixture tool input/result. Other DSH/Cordis combinations remain unverified; see [the compatibility record](docs/dsh-compatibility.md).
 
 ## Install
 
 ```bash
-pnpm dlx @deepseek-ai/dsh@0.1.5-rc.3 plugin --profile web add dsh-mcp-apps
+pnpm dlx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add dsh-mcp-apps
 ```
 
 This forwards to `pnpm` inside your DSH **profile directory** (`$DSH_HOME/profiles/web`), not your current project — it adds `dsh-mcp-apps` to that profile's own `package.json`. Don't run a plain `pnpm add dsh-mcp-apps` in an unrelated project and expect it to do anything for DSH.
@@ -105,7 +105,7 @@ A fuller example, showing environment expansion, headers, and reverse tool-calls
 After saving `cordis.patch.yml`, restart the web profile so the loader applies the plugin entry:
 
 ```bash
-pnpm dlx @deepseek-ai/dsh@0.1.5-rc.3 web
+pnpm dlx @deepseek-ai/dsh@0.1.7-rc.2 web
 ```
 
 Call a tool on a configured server that returns a `ui://` resource. Its tool input and result render in a sandboxed iframe with an **Interactive App** badge. App callbacks follow that server's `allowAppToolCalls` policy.
