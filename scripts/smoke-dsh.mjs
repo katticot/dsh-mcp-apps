@@ -98,6 +98,27 @@ async function readEvents() {
   try { return (await readFile(eventFile, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) }
   catch { return [] }
 }
+/**
+ * Dismiss the first-run "Internal Testing Notice" modal if it is showing.
+ * It renders asynchronously after navigation and its timing varies by
+ * machine — a slower CI runner can render it well after a fixed sleep would
+ * have already checked for it, leaving its overlay in place to intercept
+ * later clicks (e.g. "Choose workspace"). Poll briefly instead of assuming
+ * a fixed delay is enough, and don't fail if it never appears at all.
+ */
+async function dismissTestingNotice(targetPage, timeoutMs = 5_000) {
+  const end = Date.now() + timeoutMs
+  while (Date.now() < end) {
+    const continueButton = targetPage.getByRole('button', { name: 'Continue' })
+    if (await continueButton.count()) {
+      await continueButton.click().catch(() => {})
+      await continueButton.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {})
+      return true
+    }
+    await delay(100)
+  }
+  return false
+}
 function observePage(targetPage) {
   targetPage.on('console', message => log(`browser console ${message.type()}: ${message.text().slice(0, 500)}`))
   targetPage.on('pageerror', error => log(`browser page error: ${error.message}`))
@@ -235,12 +256,10 @@ try {
   page = await browser.newPage()
   observePage(page)
   await page.goto(authenticatedUrl, { waitUntil: 'domcontentloaded' })
-  await page.waitForTimeout(750)
-  const continueButton = page.getByRole('button', { name: 'Continue' })
-  if (await continueButton.count()) await continueButton.click()
-  await page.waitForTimeout(500)
+  await dismissTestingNotice(page)
   const workspaceButton = page.getByRole('button', { name: 'Choose workspace' })
   if (await workspaceButton.count()) {
+    await dismissTestingNotice(page, 1_000)
     await workspaceButton.click()
     const workspaceOption = page.getByRole('menuitem', { name: 'MCP Apps Smoke Workspace' })
     await workspaceOption.waitFor({ timeout: 10_000 })
@@ -377,10 +396,10 @@ try {
   page = await browser.newPage()
   observePage(page)
   await page.goto(authenticatedUrl, { waitUntil: 'domcontentloaded' })
-  const restartContinue = page.getByRole('button', { name: 'Continue' })
-  if (await restartContinue.count()) await restartContinue.click()
+  await dismissTestingNotice(page)
   const restartWorkspace = page.getByRole('button', { name: 'Choose workspace' })
   if (await restartWorkspace.count()) {
+    await dismissTestingNotice(page, 1_000)
     await restartWorkspace.click()
     await page.getByRole('menuitem', { name: 'MCP Apps Smoke Workspace' }).click()
   }
