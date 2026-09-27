@@ -59,6 +59,7 @@
   "scripts": {
     "build": "tsdown",
     "test": "vitest run",
+    "test:artifact": "vitest run --config vitest.artifact.config.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
