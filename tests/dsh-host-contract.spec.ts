@@ -145,6 +145,71 @@ describe('DSH host contracts', () => {
     await cordis.registry.delete(baseProviders)
   })
 
+  it('registers tools on a headless host that never provides webServer', async () => {
+    const cordis = new Context()
+    const definitions: unknown[] = []
+    let connection!: HostConnectionService
+    const tools = {
+      register: vi.fn((definition: unknown) => {
+        definitions.push(definition)
+        return () => {}
+      }),
+    }
+    const browserAuth = {
+      isAuthenticated: () => true,
+      authorizeIndex: () => true,
+      authenticatedUrl: (url: string) => url,
+    }
+
+    // Deliberately no `webServer` provider anywhere in this tree: a headless
+    // DSH host (no browser, no HTTP server) still needs host-side MCP tools
+    // to register, and the plugin's own `inject` list must not require a
+    // service it never touches.
+    const baseProviders = {
+      name: 'headless-base-providers',
+      apply(ctx: Context) {
+        ctx.provide('tools', tools)
+        ctx.provide('credentials', {} as any)
+      },
+    }
+    const connectionProvider = {
+      name: 'headless-connection-provider',
+      inject: ['credentials'],
+      apply(ctx: Context) {
+        connection = new HostConnectionService(ctx, [], browserAuth as any)
+      },
+    }
+    const feature = { name, inject, apply: (ctx: Context) => apply(ctx, config) }
+
+    const startAll = vi.spyOn(ServerPool.prototype, 'startAll').mockResolvedValue(undefined)
+    vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)
+
+    const baseFiber = cordis.plugin(baseProviders)
+    await baseFiber
+    const connectionFiber = cordis.plugin(connectionProvider)
+    await connectionFiber
+
+    const featureFiber = cordis.plugin(feature)
+    await featureFiber
+
+    expect(featureFiber.state).not.toBe(0)
+    expect(startAll).toHaveBeenCalledOnce()
+    const handler = connection!.createSharedFetchHandler('/api')
+    const response = await handler.fetch(new Request('http://dsh.internal/api/mcp-apps/tools/list-ui', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'headless-id', method: 'mcp-apps/tools/list-ui', payload: null }),
+    }))
+    expect(await response.json()).toEqual({ type: 'server-response', rpcId: 'headless-id', result: { ok: true, value: [] } })
+
+    await featureFiber.dispose()
+    await connectionFiber.dispose()
+    await baseFiber.dispose()
+    await cordis.registry.delete(feature)
+    await cordis.registry.delete(connectionProvider)
+    await cordis.registry.delete(baseProviders)
+  })
+
   it('keeps approve mode unavailable without scoped optional services and rejects stale approval after provider removal', async () => {
     const cordis = new Context()
     const definitions: any[] = []

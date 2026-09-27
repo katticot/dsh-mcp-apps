@@ -9,7 +9,7 @@ import { ServerToolManager, type ToolsService } from './tool-manager'
 import { ServerPool } from './transports/server-pool'
 
 export const name = 'mcp-apps'
-export const inject = ['tools', 'connection', 'webServer']
+export const inject = ['tools', 'connection']
 export { Config }
 
 declare module '@deepseek-ai/cordis' {
