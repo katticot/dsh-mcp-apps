@@ -1,0 +1,23 @@
+# The dsh-mcp-apps bundle patch: activates this plugin by inserting a single
+# `id: mcp-apps` row with an empty server map. Installing the package (`dsh
+# plugin add dsh-mcp-apps`) applies this file automatically — you don't edit
+# it yourself.
+#
+# To configure servers, add a top-level entry to your own profile's
+# cordis.patch.yml that PATCHES this row by id (no `insert:` — that would
+# create a second `mcp-apps` row and register its RPC routes twice). A patch
+# replaces the row's whole `config`, so restate every key you want, e.g.:
+#
+#   - id: mcp-apps
+#     config:
+#       servers:
+#         my-server:
+#           transport: streamable-http
+#           url: 'https://your-mcp-server.example.com/mcp'
+#
+# See the README's Configure section for the full config reference.
+- insert:
+    - id: mcp-apps
+      name: dsh-mcp-apps
+      config:
+        servers: {}

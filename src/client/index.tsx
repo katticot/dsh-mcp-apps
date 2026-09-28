@@ -3,22 +3,51 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import { McpAppToolView, type UiToolInfo } from './McpAppToolView'
+import { McpAppsStatusSection } from './McpAppsStatusSection'
 
 export const inject = ['connection', 'slots']
 
+/**
+ * npm package name, as `PluginPackageRef.name` reports it on a bundle's
+ * `plugins.detail.section` subject (see `package.json#name`). Deliberately
+ * NOT the cordis plugin id exported as `name` from `../index` ("mcp-apps") —
+ * the plugin manager keys bundles by npm package name, not by the cordis
+ * service name a package happens to register.
+ */
+const PLUGIN_PACKAGE_NAME = 'dsh-mcp-apps'
+
 export type ToolViewSlotProps = ToolCallViewProps
+
+/**
+ * Structural mirror of `PluginsSubject` from
+ * `@deepseek-ai/dsh-client-ui-plugin-manager`'s `plugins.detail.section` slot
+ * contract: what a bundle/row/official-plugin detail page is about. Kept
+ * local (rather than importing the package) so this plugin has no hard
+ * version dependency on the plugin manager's types — see the plan notes on
+ * avoiding version churn against a fast-moving optional peer.
+ */
+type PluginsDetailSubject =
+  | { kind: 'bundle'; pkg: { name: string } }
+  | { kind: 'row'; pkg: { name: string }; row: unknown }
+  | { kind: 'item'; id: string }
+
+interface PluginDetailSectionProps {
+  subject: PluginsDetailSubject
+}
 
 interface ClientSlots {
   inject: (name: string, callback: () => () => void) => () => void
   register: (
-    descriptor: { name: string; key: string },
-    component: (props: ToolCallViewProps) => React.ReactElement
+    descriptor: { name: string; key?: string; id?: string; order?: number; label?: string },
+    component: (props: any) => React.ReactElement | null
   ) => () => void
 }
 
 type ClientContext = Pick<Context, 'effect'> & {
   connection: ConnectionHandle
   slots: ClientSlots
+  /** Host-pushed event bus, used to refresh the status section promptly. */
+  on?: (event: string, listener: (...args: unknown[]) => void) => () => void
 }
 
 interface RegisteredView {
@@ -111,12 +140,48 @@ export function apply(ctx: ClientContext) {
     void syncTools()
   }, DISCOVERY_INTERVAL_MS)
 
+  // Read-only server status section on this plugin's own bundle detail page.
+  // `plugins.detail.section` is declared by the optional
+  // `@deepseek-ai/dsh-client-ui-plugin-manager` peer (deliberately NOT listed
+  // in this package's `dsh.client.inject` — see package.json). `slots.inject`
+  // never throws for an undeclared slot: it defers via a declaration
+  // subscription and simply never fires the callback if the slot is never
+  // declared (plugin manager not installed), so this needs no guard — same
+  // as the tool-view registration above.
+  ctx.effect(() => {
+    return ctx.slots.inject('plugins.detail.section', () => {
+      return ctx.slots.register({ name: 'plugins.detail.section', id: 'mcp-apps-status', order: 0 }, (props: PluginDetailSectionProps) => {
+        if (props.subject.kind !== 'bundle' || props.subject.pkg.name !== PLUGIN_PACKAGE_NAME) {
+          return null
+        }
+        return <McpAppsStatusSection connection={connection} on={ctx.on} />
+      })
+    })
+  }, 'mcp-apps: plugins.detail.section')
+
+  // Host-pushed ui-tools/changed event and connection reset listeners, on
+  // top of the generation-subscribe + interval poll above, for a faster
+  // refresh when the host can tell us something changed.
+  let unlistenReset: (() => void) | undefined
+  let unlistenChanged: (() => void) | undefined
+
+  if (typeof ctx.on === 'function') {
+    unlistenReset = ctx.on('connection/reset', () => {
+      void syncTools(true)
+    })
+    unlistenChanged = ctx.on('ui-tools/changed', () => {
+      void syncTools(true)
+    })
+  }
+
   const dispose = () => {
     if (!active) return
     active = false
     discoveryRequested = false
     clearInterval(interval)
     unlistenGeneration()
+    unlistenReset?.()
+    unlistenChanged?.()
     for (const name of registeredViews.keys()) unregisterView(name)
     registeredViews.clear()
   }

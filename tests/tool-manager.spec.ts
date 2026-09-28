@@ -437,6 +437,118 @@ describe('ServerToolManager', () => {
     expect(registered[0]).not.toEqual(registered[1])
   })
 
+  it('counts app-only tools in toolCount alongside model-visible ones, and resets counts to 0 after disposal', () => {
+    const mockToolsService = { register: vi.fn(() => vi.fn()) }
+    const sessionStore = new AppSessionStore()
+    const manager = new ServerToolManager(mockToolsService, sessionStore)
+
+    const tools: Tool[] = [
+      { name: 'model_tool', inputSchema: { type: 'object' } },
+      {
+        name: 'app_only_one',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { resourceUri: 'ui://test/one', visibility: ['app'] } },
+      },
+      {
+        name: 'app_only_two',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { resourceUri: 'ui://test/two', visibility: ['app'] } },
+      },
+    ]
+
+    manager.syncServerTools('test-srv', {} as any, tools, {
+      transport: 'stdio',
+      command: 'srv',
+      allowAppToolCalls: true,
+    })
+
+    expect(manager.getToolCounts('test-srv')).toEqual({ toolCount: 3, uiToolCount: 2 })
+
+    manager.evictServer('test-srv')
+    expect(manager.getToolCounts('test-srv')).toEqual({ toolCount: 0, uiToolCount: 0 })
+  })
+
+  it('builds per-tool summaries with correct visibility/hasUi, excludes description/inputSchema, and clears on eviction', () => {
+    const mockToolsService = { register: vi.fn(() => vi.fn()) }
+    const sessionStore = new AppSessionStore()
+    const manager = new ServerToolManager(mockToolsService, sessionStore)
+
+    const tools: Tool[] = [
+      {
+        // model-only, no UI
+        name: 'model_only_tool',
+        description: 'secret description',
+        inputSchema: { type: 'object', properties: { secret: {} } },
+        _meta: { ui: { visibility: ['model'] } },
+      },
+      {
+        // app-only, with UI
+        name: 'app_only_tool',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { resourceUri: 'ui://test/app-only', visibility: ['app'] } },
+      },
+      {
+        // both, with UI
+        name: 'both_tool',
+        inputSchema: { type: 'object' },
+        _meta: { ui: { resourceUri: 'ui://test/both' } },
+      },
+      {
+        // both, no UI (default visibility, no resourceUri)
+        name: 'plain_tool',
+        inputSchema: { type: 'object' },
+      },
+    ]
+
+    manager.syncServerTools('test-srv', {} as any, tools, {
+      transport: 'stdio',
+      command: 'srv',
+      allowAppToolCalls: true,
+    })
+
+    const summaries = manager.getToolSummaries('test-srv')
+    expect(summaries).toHaveLength(4)
+
+    const byRawName = new Map(summaries.map(s => [s.rawName, s]))
+    expect(byRawName.get('model_only_tool')).toEqual({
+      rawName: 'model_only_tool',
+      publicName: 'mcp__test-srv__model_only_tool',
+      visibility: 'model',
+      hasUi: false,
+    })
+    expect(byRawName.get('app_only_tool')).toEqual({
+      rawName: 'app_only_tool',
+      publicName: 'mcp__test-srv__app_only_tool',
+      visibility: 'app',
+      hasUi: true,
+    })
+    expect(byRawName.get('both_tool')).toEqual({
+      rawName: 'both_tool',
+      publicName: 'mcp__test-srv__both_tool',
+      visibility: 'both',
+      hasUi: true,
+    })
+    expect(byRawName.get('plain_tool')).toEqual({
+      rawName: 'plain_tool',
+      publicName: 'mcp__test-srv__plain_tool',
+      visibility: 'both',
+      hasUi: false,
+    })
+
+    for (const summary of summaries) {
+      expect(summary).not.toHaveProperty('description')
+      expect(summary).not.toHaveProperty('inputSchema')
+    }
+
+    manager.evictServer('test-srv')
+    expect(manager.getToolSummaries('test-srv')).toEqual([])
+  })
+
+  it('returns [] from getToolSummaries for a server that has never synced', () => {
+    const manager = new ServerToolManager({ register: vi.fn(() => vi.fn()) }, new AppSessionStore())
+    expect(manager.getToolSummaries('never-synced')).toEqual([])
+  })
+
   it('drops out-of-order tool refresh responses so the newest list wins', async () => {
     const syncSpy = vi.fn()
     const mockToolManager = {

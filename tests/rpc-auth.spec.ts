@@ -537,6 +537,24 @@ describe('RPC tools/call Authorization and Lifecycle', () => {
     expect(forwardedSignal.aborted).toBe(true)
   })
 
+  it('serves servers/status without a session token and never leaks command/args/env/headers/url', async () => {
+    const statusSpy = vi.spyOn(ServerPool.prototype, 'getStatusSnapshot').mockReturnValue([
+      { name: 'analytics', transport: 'stdio', connected: true, toolCount: 2, uiToolCount: 1 },
+    ])
+
+    const res = await rpcHandler('servers/status', {})
+    expect(res).toEqual({
+      ok: true,
+      value: [
+        { name: 'analytics', transport: 'stdio', connected: true, toolCount: 2, uiToolCount: 1 },
+      ],
+    })
+    expect(statusSpy).toHaveBeenCalled()
+
+    const serialized = JSON.stringify(res)
+    expect(serialized).not.toMatch(/command|args|env|headers|"url"/)
+  })
+
   it('disposes sessionStore when host plugin unloads', async () => {
     const store = (toolManager as any).sessionStore
     const disposeSpy = vi.spyOn(store, 'dispose')

@@ -91,6 +91,13 @@ export function apply(ctx: Context, config: Config) {
               return { ok: true as const, value: pool.getUiToolsSnapshot() }
             }
 
+            case 'servers/status': {
+              // Read-only, no session token: connection status is not
+              // session-scoped and carries no secrets (see ServerStatus).
+              await pool.waitForInitialSync()
+              return { ok: true as const, value: pool.getStatusSnapshot() }
+            }
+
             case 'resources/list': {
               const session = requireSession(params)
               if ('error' in session) return session.error
@@ -200,7 +207,7 @@ export function apply(ctx: Context, config: Config) {
       }
     }
 
-    const endpoints = ['tools/list-ui', 'resources/list', 'resources/read', 'resources/read-raw', 'tools/call'] as const
+    const endpoints = ['tools/list-ui', 'servers/status', 'resources/list', 'resources/read', 'resources/read-raw', 'tools/call'] as const
     const unregisterFetchRoutes = endpoints.map(endpoint => connectionFetch.register({
       path: `/api/mcp-apps/${endpoint}`,
       methods: ['POST'],

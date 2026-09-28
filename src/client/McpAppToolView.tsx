@@ -420,15 +420,29 @@ export function McpAppToolView({ tool, connection, block }: McpAppToolViewProps)
   }
 
   // 3. Keep enclosing TurnProcess open for MCP Apps without touching outside elements
+  //
+  // An MCP App is mounted inside the chat's per-Turn process disclosure. That
+  // disclosure is foldable and starts closed, and the host re-applies it on
+  // every commit where the Turn is folded (`hidden="until-found"` on the
+  // member wrapper; the toggle loses `data-open`). A one-shot or time-boxed
+  // reveal therefore loses the race: the App renders, then a later host commit
+  // folds it away — which is exactly the "appears then disappears" failure.
+  // So the reveal is bound to the view's lifetime and re-asserted on every
+  // relevant mutation, not to a fixed window.
   useEffect(() => {
     if (!resource) return
     const iframe = iframeRef.current
     if (!iframe) return
 
     let active = true
+    // Set only by a real user gesture on the disclosure toggle, so the loop
+    // stops fighting a reader who deliberately folded the Turn. Our own
+    // programmatic `toggle.click()` emits no pointer/key event and so can
+    // never set this flag.
+    let userCollapsed = false
 
     const revealOwnAncestors = () => {
-      if (!active || !iframe) return
+      if (!active || userCollapsed || gesturePending) return
 
       let el: HTMLElement | null = iframe.parentElement
       while (el && el !== document.body) {
@@ -444,27 +458,82 @@ export function McpAppToolView({ tool, connection, block }: McpAppToolViewProps)
       }
     }
 
-    revealOwnAncestors()
-    const t1 = setTimeout(revealOwnAncestors, 300)
-    const t2 = setTimeout(revealOwnAncestors, 800)
-    const t3 = setTimeout(revealOwnAncestors, 1500)
-    const t4 = setTimeout(revealOwnAncestors, 2500)
+    const targetToObserve = iframe.closest?.('[data-turn-process]') ?? iframe.parentElement ?? document.body
 
-    const tStop = setTimeout(() => {
-      active = false
-      observer.disconnect()
-    }, 3500)
+    // Resolved lazily rather than once at mount: the App's iframe is not yet
+    // inside the Turn disclosure on the commit that first renders it, so a
+    // mount-time lookup would cache `null` and silently disable the reader
+    // intent check below.
+    const findTurnProcess = (): HTMLElement | null => {
+      let el: HTMLElement | null = iframe.parentElement
+      while (el && el !== document.body) {
+        if (el.hasAttribute('data-turn-process')) return el
+        el = el.parentElement
+      }
+      return null
+    }
+
+    const isTurnFolded = () => {
+      const turn = findTurnProcess()
+      return turn !== null && turn.querySelector('button[data-turn-process][data-open]') === null
+    }
+
+    let settleTimer: ReturnType<typeof setTimeout> | null = null
+    // A pointer/key gesture on the disclosure means the reader is toggling it,
+    // but at capture time the click has not been handled yet: the toggle still
+    // reports its pre-click state. So the gesture is parked here, and the
+    // reader's intent — fold or expand — is only resolved from the state the
+    // host has committed one macrotask later. While parked, the loop holds
+    // off, otherwise it would strip `hidden` during the reader's own fold.
+    let gesturePending = false
+
+    const clearSettle = () => {
+      gesturePending = false
+      if (settleTimer === null) return
+      clearTimeout(settleTimer)
+      settleTimer = null
+    }
+
+    const markUserGesture = () => {
+      clearSettle()
+      gesturePending = true
+      settleTimer = setTimeout(() => {
+        settleTimer = null
+        gesturePending = false
+        // Folded after the gesture settles: the reader closed this Turn, so
+        // stop re-asserting. Still open: they expanded it (or the host kept it
+        // open), and the loop stays free to re-assert on later commits.
+        userCollapsed = isTurnFolded()
+      }, 0)
+    }
+
+    const markUserGestureOnToggle = (event: Event) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (!target.closest('button[data-turn-process]')) return
+      markUserGesture()
+    }
+
+    targetToObserve.addEventListener('pointerdown', markUserGestureOnToggle, true)
+    targetToObserve.addEventListener('keydown', markUserGestureOnToggle, true)
 
     const observer = new MutationObserver(() => {
       revealOwnAncestors()
     })
 
-    const targetToObserve = iframe.closest?.('[data-turn-process]') ?? iframe.parentElement ?? document.body
     observer.observe(targetToObserve, {
       attributes: true,
       attributeFilter: ['hidden', 'data-open', 'aria-expanded'],
       subtree: true,
     })
+
+    // The disclosure is rendered asynchronously after the App resource
+    // arrives, so re-assert across the first few commits as well.
+    revealOwnAncestors()
+    const t1 = setTimeout(revealOwnAncestors, 300)
+    const t2 = setTimeout(revealOwnAncestors, 800)
+    const t3 = setTimeout(revealOwnAncestors, 1500)
+    const t4 = setTimeout(revealOwnAncestors, 2500)
 
     return () => {
       active = false
@@ -472,8 +541,10 @@ export function McpAppToolView({ tool, connection, block }: McpAppToolViewProps)
       clearTimeout(t2)
       clearTimeout(t3)
       clearTimeout(t4)
-      clearTimeout(tStop)
+      clearSettle()
       observer.disconnect()
+      targetToObserve.removeEventListener('pointerdown', markUserGestureOnToggle, true)
+      targetToObserve.removeEventListener('keydown', markUserGestureOnToggle, true)
     }
   }, [resource])
 

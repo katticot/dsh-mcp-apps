@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { ServerPool } from '../src/transports/server-pool'
+import { ServerPool, sanitizeErrorMessage } from '../src/transports/server-pool'
+import { ServerToolManager } from '../src/tool-manager'
+import { AppSessionStore } from '../src/session-store'
 
 describe('ServerPool Lifecycle', () => {
   it('startAll runs servers in parallel and slow server does not block others', async () => {
@@ -267,6 +269,75 @@ describe('ServerPool Lifecycle', () => {
     expect(pool.getUiToolsSnapshot()).toEqual([])
   })
 
+  it('getStatusSnapshot reports connected/tool counts per server without leaking config secrets', async () => {
+    const connectedSummaries = [
+      { rawName: 'render_chart', publicName: 'mcp__connected__render_chart', visibility: 'both' as const, hasUi: true },
+    ]
+    const mockToolManager = {
+      getUiToolsSnapshot: () => [],
+      getToolCounts: (serverName: string) => (serverName === 'connected' ? { toolCount: 3, uiToolCount: 1 } : { toolCount: 0, uiToolCount: 0 }),
+      getToolSummaries: (serverName: string) => (serverName === 'connected' ? connectedSummaries : []),
+    } as any
+    const pool = new ServerPool({} as any, {
+      servers: {
+        connected: { transport: 'stdio', command: 'secret-cmd', args: ['--token', 'shh'], env: { TOKEN: 'shh' } },
+        disconnected: { transport: 'sse', url: 'https://mcp.example.com/sse', headers: { Authorization: 'Bearer shh' } },
+      },
+    }, mockToolManager)
+    ;(pool as any).servers.set('connected', { client: {}, disposeTransport: vi.fn() })
+    ;(pool as any).lastErrors.set('disconnected', 'ECONNREFUSED')
+
+    const snapshot = pool.getStatusSnapshot()
+    expect(snapshot).toEqual([
+      { name: 'connected', transport: 'stdio', connected: true, toolCount: 3, uiToolCount: 1, lastError: undefined, tools: connectedSummaries },
+      { name: 'disconnected', transport: 'sse', connected: false, toolCount: 0, uiToolCount: 0, lastError: 'ECONNREFUSED', tools: [] },
+    ])
+
+    const serialized = JSON.stringify(snapshot)
+    expect(serialized).not.toContain('secret-cmd')
+    expect(serialized).not.toContain('shh')
+    expect(serialized).not.toContain('Authorization')
+    expect(serialized).not.toContain('command')
+    expect(serialized).not.toContain('env')
+    expect(serialized).not.toContain('headers')
+    expect(serialized).not.toContain('url')
+  })
+
+  it('getStatusSnapshot never leaks a synced tool\'s description/inputSchema, even though the underlying Tool object carries them', async () => {
+    const realToolManager = new ServerToolManager({ register: () => () => void 0 }, new AppSessionStore())
+    const craftedTool = {
+      name: 'sneaky_tool',
+      description: 'should never appear',
+      inputSchema: { type: 'object', properties: { secret: { type: 'string', description: 'also should never appear' } } },
+    } as any
+
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd' } },
+    }, realToolManager)
+    realToolManager.syncServerTools('srv', {} as any, [craftedTool])
+
+    const snapshot = pool.getStatusSnapshot()
+    const srvStatus = snapshot.find(s => s.name === 'srv')
+    expect(srvStatus?.tools).toHaveLength(1)
+    expect(srvStatus?.tools?.[0]).toEqual({
+      rawName: 'sneaky_tool',
+      publicName: 'mcp__srv__sneaky_tool',
+      visibility: 'both',
+      hasUi: false,
+    })
+
+    const serialized = JSON.stringify(snapshot)
+    expect(serialized).not.toContain('should never appear')
+    expect(serialized).not.toContain('secret')
+
+    for (const server of snapshot) {
+      for (const tool of server.tools ?? []) {
+        expect(Object.keys(tool)).not.toContain('description')
+        expect(Object.keys(tool)).not.toContain('inputSchema')
+      }
+    }
+  })
+
   it('discards a zombie refreshTools resolution after the server is evicted/closed and reconnects', async () => {
     const syncSpy = vi.fn()
     const mockToolManager = { syncServerTools: syncSpy, evictServer: vi.fn(), getUiToolsSnapshot: () => [] } as any
@@ -288,5 +359,99 @@ describe('ServerPool Lifecycle', () => {
     await refreshPromise
 
     expect(syncSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('sanitizeErrorMessage', () => {
+  it('strips a query string (e.g. a leaked token) from a URL, keeping scheme://host/path', () => {
+    const message = 'fetch failed: https://mcp.example.com/sse?token=super-secret-value'
+    const sanitized = sanitizeErrorMessage(message)
+    expect(sanitized).toBe('fetch failed: https://mcp.example.com/sse')
+    expect(sanitized).not.toContain('super-secret-value')
+    expect(sanitized).not.toContain('?')
+  })
+
+  it('strips a fragment from a URL', () => {
+    const sanitized = sanitizeErrorMessage('connect ECONNREFUSED https://host.example/path#fragment-secret')
+    expect(sanitized).toBe('connect ECONNREFUSED https://host.example/path')
+    expect(sanitized).not.toContain('fragment-secret')
+  })
+
+  it('strips userinfo (user:pass@) from a URL', () => {
+    const sanitized = sanitizeErrorMessage('request failed for https://user:hunter2@host.example/api')
+    expect(sanitized).toBe('request failed for https://host.example/api')
+    expect(sanitized).not.toContain('hunter2')
+    expect(sanitized).not.toContain('user:')
+  })
+
+  it('strips userinfo, query and fragment together', () => {
+    const sanitized = sanitizeErrorMessage('https://user:pw@host.example/a/b?x=1&y=2#frag')
+    expect(sanitized).toBe('https://host.example/a/b')
+  })
+
+  it('collapses whitespace and newlines', () => {
+    const sanitized = sanitizeErrorMessage('line one\n\n  line   two\t\tline three')
+    expect(sanitized).toBe('line one line two line three')
+  })
+
+  it('truncates a long message to ~300 chars with an ellipsis', () => {
+    const longMessage = 'x'.repeat(1000)
+    const sanitized = sanitizeErrorMessage(longMessage)
+    expect(sanitized.length).toBe(301) // 300 chars + ellipsis
+    expect(sanitized.endsWith('…')).toBe(true)
+    expect(sanitized.startsWith('x'.repeat(300))).toBe(true)
+  })
+
+  it('does not truncate a message at or under the limit', () => {
+    const message = 'x'.repeat(300)
+    expect(sanitizeErrorMessage(message)).toBe(message)
+  })
+
+  it('redacts a configured secret value (env/header) if it appears verbatim in the message', () => {
+    const sanitized = sanitizeErrorMessage(
+      'spawn failed: could not authenticate with token ABC123SECRET against upstream',
+      ['ABC123SECRET']
+    )
+    expect(sanitized).not.toContain('ABC123SECRET')
+    expect(sanitized).toContain('[redacted]')
+  })
+
+  it('redacts every occurrence and every configured secret value', () => {
+    const sanitized = sanitizeErrorMessage(
+      'first SECRET_ONE then SECRET_TWO then SECRET_ONE again',
+      ['SECRET_ONE', 'SECRET_TWO']
+    )
+    expect(sanitized).toBe('first [redacted] then [redacted] then [redacted] again')
+  })
+
+  it('ignores secret values shorter than 3 characters to avoid collateral redaction', () => {
+    const sanitized = sanitizeErrorMessage('a b c error', ['a'])
+    expect(sanitized).toBe('a b c error')
+  })
+
+  it('leaves a message with no URL or secrets unchanged (aside from whitespace collapsing)', () => {
+    expect(sanitizeErrorMessage('spawn ENOENT')).toBe('spawn ENOENT')
+  })
+
+  it('redacts just the credential part of a "Bearer <token>" configured value, even though only the token (not the whole header value) appears in the message', () => {
+    const sanitized = sanitizeErrorMessage('invalid token abc123xyz', ['Bearer abc123xyz'])
+    expect(sanitized).toBe('invalid token [redacted]')
+    expect(sanitized).not.toContain('abc123xyz')
+  })
+
+  it('redacts a percent-encoded occurrence of a configured value', () => {
+    // Not URL-shaped (no scheme://), so URL_TOKEN_PATTERN doesn't strip it
+    // first - this exercises the percent-encoded secret candidate itself.
+    const sanitized = sanitizeErrorMessage(
+      'raw request body: authorization=Bearer%20abc123xyz sent upstream',
+      ['Bearer abc123xyz']
+    )
+    expect(sanitized).not.toContain('abc123xyz')
+    expect(sanitized).toContain('[redacted]')
+  })
+
+  it('redacts the full configured value as a single [redacted], not once per derived part', () => {
+    const sanitized = sanitizeErrorMessage('Authorization: Bearer abc123xyz', ['Bearer abc123xyz'])
+    expect(sanitized).toBe('Authorization: [redacted]')
   })
 })

@@ -68,7 +68,13 @@ async function waitFor(predicate, description, timeoutMs = 30_000) {
 async function appendPluginConfig(defaultTimeoutMs = 30_000) {
   const command = process.execPath
   const args = ['--experimental-strip-types', fixturePath, '--delay-ms=25000']
-  const content = `- id: session-title-llm\n  disabled: true\n- insert:\n    - id: smoke-workspace\n      name: dsh-mcp-apps-smoke-workspace\n    - id: mcp-apps\n      name: dsh-mcp-apps\n      config:\n        defaultTimeoutMs: ${defaultTimeoutMs}\n        servers:\n          demo:\n            transport: stdio\n            command: ${JSON.stringify(command)}\n            args: ${JSON.stringify(args)}\n            env:\n              MCP_SMOKE_EVENT_FILE: ${JSON.stringify(eventFile)}\n              DSH_MCP_APPS_SMOKE_POLICY: ${policy}\n            allowAppToolCalls: ${policy}\n`
+  // `dsh plugin add <tarball>` already activated the dsh-mcp-apps *bundle*,
+  // which inserts its own `id: mcp-apps` row (dsh/cordis.patch.yml). Patching
+  // that same id here (no `insert:`) configures it in place; inserting a
+  // second `id: mcp-apps` row would register the `/api/mcp-apps/*` RPC
+  // routes twice and crash (HostConnectionService throws on a duplicate
+  // exact Fetch route).
+  const content = `- id: session-title-llm\n  disabled: true\n- insert:\n    - id: smoke-workspace\n      name: dsh-mcp-apps-smoke-workspace\n- id: mcp-apps\n  config:\n    defaultTimeoutMs: ${defaultTimeoutMs}\n    servers:\n      demo:\n        transport: stdio\n        command: ${JSON.stringify(command)}\n        args: ${JSON.stringify(args)}\n        env:\n          MCP_SMOKE_EVENT_FILE: ${JSON.stringify(eventFile)}\n          DSH_MCP_APPS_SMOKE_POLICY: ${policy}\n        allowAppToolCalls: ${policy}\n`
   await writeFile(path.join(profile, 'cordis.patch.yml'), content)
 }
 function startDsh(port) {
