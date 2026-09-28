@@ -54,43 +54,43 @@ const AppToolCallsSchema = Schema.union([
   Schema.const('approve' as const),
   Schema.const('allow' as const),
   Schema.boolean(),
-]).default(false)
+]).default(false).description('Whether MCP Apps served by this server may invoke tools back on the host: "deny"/false blocks it, "approve" requires per-call approval, "allow"/true permits it outright.')
 
 const ReconnectSchema: Schema<ReconnectOptions> = Schema.object({
-  maxRetries: Schema.number().default(5),
-  initialDelayMs: Schema.number().default(1000),
-  maxDelayMs: Schema.number().default(30000),
-  backoffFactor: Schema.number().default(1.5),
-})
+  maxRetries: Schema.number().default(5).description('Maximum number of reconnect attempts after the connection closes before giving up.'),
+  initialDelayMs: Schema.number().default(1000).role('ms').description('Delay before the first reconnect attempt, in milliseconds.'),
+  maxDelayMs: Schema.number().default(30000).role('ms').description('Upper bound on the reconnect delay after exponential backoff, in milliseconds.'),
+  backoffFactor: Schema.number().default(1.5).description('Multiplier applied to the delay after each failed reconnect attempt.'),
+}).description('Reconnection behavior applied after this server\'s connection closes unexpectedly.')
 
 const StdioSchema: Schema<StdioServerConfig> = Schema.object({
-  transport: Schema.const('stdio').default('stdio'),
-  command: Schema.string().required(),
-  args: Schema.array(String).default([]),
-  env: Schema.dict(String).default({}),
-  cwd: Schema.string(),
-  toolCallTimeoutMs: Schema.number().min(1).default(30000),
+  transport: Schema.const('stdio').default('stdio').description('Transport kind: a locally spawned process speaking MCP over stdio.'),
+  command: Schema.string().required().description('Executable to spawn for this MCP server.'),
+  args: Schema.array(String).default([]).description('Command-line arguments passed to the spawned process.'),
+  env: Schema.dict(Schema.string().role('secret')).default({}).description('Extra environment variables for the spawned process. Supports `${VAR}` expansion; values are treated as secrets and never returned to clients.'),
+  cwd: Schema.string().description('Working directory for the spawned process. Defaults to the host process\'s own working directory.'),
+  toolCallTimeoutMs: Schema.number().min(1).default(30000).role('ms').description('Maximum time to wait for a tool call to this server to complete, in milliseconds.'),
   reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
-  allowedPermissions: Schema.array(String).default([]),
-  allowedVars: Schema.array(String).default([]),
-  maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES),
-})
+  allowedPermissions: Schema.array(String).default([]).description('Iframe permissions (e.g. "camera", "microphone", "geolocation") this server\'s MCP Apps may request.'),
+  allowedVars: Schema.array(String).default([]).description('Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read.'),
+  maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES).description('Maximum size in bytes of a single incoming stdio message (bytes buffered since the last newline). Default 16MB.'),
+}).description('Local process (stdio)')
 
 const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   transport: Schema.union([
     Schema.const('sse'),
     Schema.const('streamable-http'),
-  ]).required(),
-  url: Schema.string().required().pattern(REMOTE_URL_PATTERN),
-  headers: Schema.dict(String).default({}),
-  toolCallTimeoutMs: Schema.number().min(1).default(30000),
+  ]).required().description('Transport kind: a remote MCP server reached over HTTP, either as SSE or streamable HTTP.'),
+  url: Schema.string().required().pattern(REMOTE_URL_PATTERN).description('HTTP(S) endpoint of the remote MCP server.'),
+  headers: Schema.dict(Schema.string().role('secret')).default({}).description('Extra HTTP headers sent with every request to this server. Supports `${VAR}` expansion; values are treated as secrets and never returned to clients.'),
+  toolCallTimeoutMs: Schema.number().min(1).default(30000).role('ms').description('Maximum time to wait for a tool call to this server to complete, in milliseconds.'),
   reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
-  allowedPermissions: Schema.array(String).default([]),
-  allowedVars: Schema.array(String).default([]),
-  maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES),
-})
+  allowedPermissions: Schema.array(String).default([]).description('Iframe permissions (e.g. "camera", "microphone", "geolocation") this server\'s MCP Apps may request.'),
+  allowedVars: Schema.array(String).default([]).description('Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read.'),
+  maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES).description('Maximum size in bytes of a single incoming message (an SSE event or a streamable-http response body). Default 16MB.'),
+}).description('Remote server (SSE / streamable HTTP)')
 
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 30000
 
@@ -115,8 +115,8 @@ const ServerNameSchema = Schema.string()
   .description('Server name cannot contain consecutive underscores or end with an underscore')
 
 export const Config: Schema<Config> = Schema.object({
-  servers: Schema.dict(Schema.union([StdioSchema, RemoteSchema]).required(), ServerNameSchema).default({}),
-  defaultTimeoutMs: Schema.number().min(1).default(30000),
+  servers: Schema.dict(Schema.union([StdioSchema, RemoteSchema]).required(), ServerNameSchema).default({}).description('MCP servers to host, keyed by a name unique within this plugin.'),
+  defaultTimeoutMs: Schema.number().min(1).default(30000).role('ms').description('Fallback tool-call timeout, in milliseconds, used by any server that does not set its own `toolCallTimeoutMs`.'),
 })
 
 import { DSH_ENV_PREFIX, SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'

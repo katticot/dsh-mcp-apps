@@ -244,6 +244,31 @@ describe('Config Schema Validation', () => {
   })
 })
 
+describe('Schema metadata (descriptions and roles)', () => {
+  it('describes servers/defaultTimeoutMs and marks defaultTimeoutMs as a ms-role field', () => {
+    const configSchema = Config as any
+    expect(configSchema.dict.servers.meta?.description).toBeTruthy()
+    expect(configSchema.dict.defaultTimeoutMs.meta?.description).toBeTruthy()
+    expect(configSchema.dict.defaultTimeoutMs.meta?.role).toBe('ms')
+  })
+
+  it('marks env/headers dict values as secret-role without changing their type or default', () => {
+    const configSchema = Config as any
+    const stdioSchema = configSchema.dict.servers.inner.list[0]
+    const remoteSchema = configSchema.dict.servers.inner.list[1]
+
+    expect(stdioSchema.dict.env.type).toBe('dict')
+    expect(stdioSchema.dict.env.inner.type).toBe('string')
+    expect(stdioSchema.dict.env.inner.meta?.role).toBe('secret')
+    expect(stdioSchema.dict.env.meta?.default).toEqual({})
+
+    expect(remoteSchema.dict.headers.type).toBe('dict')
+    expect(remoteSchema.dict.headers.inner.type).toBe('string')
+    expect(remoteSchema.dict.headers.inner.meta?.role).toBe('secret')
+    expect(remoteSchema.dict.headers.meta?.default).toEqual({})
+  })
+})
+
 describe('Environment Variable Expansion', () => {
   const mockEnv = {
     USER_NAME: 'Alice',
