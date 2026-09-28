@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.3] - 2026-09-28
+
+### Added
+
+- Config schema metadata: every field in `Config` now carries a human-readable `.description()`, timeout fields carry `.role('ms')`, and `env`/`headers` dict values carry `.role('secret')` — DSH's schema-driven settings forms now show documentation and redact secrets before they reach the browser, without changing any validation, default, or type.
+- A read-only `servers/status` endpoint and a matching status section on the plugin's page in DSH's Plugins UI: per-server connection state, tool counts, and an expandable, filterable list of individual tool names grouped by visibility (model-visible / app-only / both). Never exposes `command`, `args`, `env`, `headers`, or `url`.
+- The package now self-activates as a DSH **bundle**: `dsh plugin add dsh-mcp-apps` inserts its `mcp-apps` row automatically (via `dsh/cordis.patch.yml`), giving it a card and detail page — with the official MCP mark as its icon — in DSH's Plugins UI. Previously it had to be wired in by hand with an `insert:` patch entry and had no presence in that UI at all.
+
+### Changed
+
+- README's Install and Configure sections rewritten for the bundle flow: install via the DSH Harness UI or CLI, then configure by *patching* (not `insert:`-ing) the `mcp-apps` row in your profile's `cordis.patch.yml`. Added a "Migrating from 0.2.x" section for existing `insert:`-based configs.
+- Peer ranges bumped to `^0.1.7-rc.2` to match the latest DSH; added `@deepseek-ai/dsh-client-ui-plugin-manager` as an *optional* peer, deliberately left out of `dsh.client.inject` so a deployment without the plugin manager doesn't gate this plugin's own tool-view loading on it.
+- `scripts/smoke-dsh.mjs` now patches the bundle's own `mcp-apps` row instead of inserting a second one.
+- Common transitive dependencies routed through `@socketregistry` drop-in replacements via pnpm `overrides`.
+
+### Security
+
+- Connection-error messages surfaced through `servers/status` are sanitized before storage: URL userinfo/query/fragment are stripped, any configured secret value (plus `Bearer <token>`-style sub-tokens and percent-encoded variants of it) is redacted, and the result is truncated to 300 characters. Configured secrets under 3 characters are not redacted, to avoid collateral redaction of common short substrings — documented as a known limitation.
+
+[Compare v0.2.2...v0.2.3](https://github.com/katticot/dsh-mcp-apps/compare/v0.2.2...v0.2.3)
+
 ## [0.2.2] - 2026-09-27
 
 **Requires DSH >= 0.1.7-rc.2** (this release is incompatible with DSH `0.1.5-rc.x`; see [Compatibility](#compatibility)).
@@ -89,6 +110,7 @@ Initial release: Universal MCP Apps (SEP-1865) host & UI plugin for DeepSeek Har
 
 [v0.1.0](https://github.com/katticot/dsh-mcp-apps/releases/tag/v0.1.0)
 
+[0.2.3]: https://github.com/katticot/dsh-mcp-apps/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/katticot/dsh-mcp-apps/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/katticot/dsh-mcp-apps/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/katticot/dsh-mcp-apps/compare/v0.1.0...v0.2.0
