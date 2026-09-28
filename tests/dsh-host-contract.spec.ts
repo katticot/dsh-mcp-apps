@@ -34,7 +34,7 @@ describe('DSH host contracts', () => {
     const stopAll = vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)
     apply(ctx as any, config)
 
-    expect(register).toHaveBeenCalledTimes(5)
+    expect(register).toHaveBeenCalledTimes(6)
     expect(routes.has('/api/mcp-apps/tools/list-ui')).toBe(true)
     const route = routes.get('/api/mcp-apps/tools/list-ui')!
     expect(route.methods).toEqual(['POST'])

@@ -2,10 +2,127 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/app-bridge'
 import type { Context } from '@deepseek-ai/cordis'
-import { resolveToolCallTimeoutMs, type Config, type ServerConfig } from '../config'
-import type { ServerToolManager, UiToolDescriptor } from '../tool-manager'
+import { expandEnvVars, resolveToolCallTimeoutMs, type Config, type ServerConfig } from '../config'
+import type { ServerToolManager, UiToolDescriptor, ToolSummary } from '../tool-manager'
 import { createStdioTransport, type ManagedStdio } from './subprocess'
 import { createRemoteTransport } from './remote'
+
+/** Replacement text for a redacted secret or a stripped URL query/fragment/userinfo. */
+const REDACTED = '[redacted]'
+
+/** `lastErrors` entries are truncated to this many characters (plus an ellipsis) before storage. */
+export const MAX_ERROR_MESSAGE_LENGTH = 300
+
+/** Matches a `scheme://...` token so its userinfo/query/fragment can be stripped without touching the rest of the message. */
+const URL_TOKEN_PATTERN = /\b[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S+/g
+
+/** `scheme://[user:pass@]host/path?query#fragment` -> `scheme://host/path` (userinfo, query and fragment dropped). */
+function sanitizeUrlToken(token: string): string {
+  const schemeEnd = token.indexOf('://')
+  if (schemeEnd === -1) return token
+  const scheme = token.slice(0, schemeEnd + 3)
+  let rest = token.slice(schemeEnd + 3)
+
+  const queryOrFragmentIndex = rest.search(/[?#]/)
+  if (queryOrFragmentIndex !== -1) rest = rest.slice(0, queryOrFragmentIndex)
+
+  const pathStart = rest.indexOf('/')
+  let authority = pathStart === -1 ? rest : rest.slice(0, pathStart)
+  const path = pathStart === -1 ? '' : rest.slice(pathStart)
+
+  const userinfoEnd = authority.lastIndexOf('@')
+  if (userinfoEnd !== -1) authority = authority.slice(userinfoEnd + 1)
+
+  return `${scheme}${authority}${path}`
+}
+
+/**
+ * Sanitizes a raw connect/reconnect failure message before it is stored in
+ * `lastErrors` and served back over the unauthenticated `servers/status` RPC.
+ *
+ * The MCP SDK's connect failures can embed a remote server's configured
+ * `url` verbatim (a `fetch failed: https://host/mcp?token=...` style
+ * message), so every URL-shaped token in the message has its userinfo,
+ * query string and fragment stripped, keeping only `scheme://host/path`.
+ * `secretValues` additionally redacts any literal occurrence of this
+ * server's own expanded env values (stdio) or header values (remote), and
+ * of the recognizable parts of those values {@link expandSecretCandidates}
+ * derives (e.g. just the token out of a `Bearer <token>` header, and its
+ * percent-encoded form) — belt-and-suspenders for a subprocess or library
+ * that happens to echo one back in an error. Finally, whitespace/newlines
+ * are collapsed and the result is truncated to
+ * {@link MAX_ERROR_MESSAGE_LENGTH} characters.
+ */
+export function sanitizeErrorMessage(message: string, secretValues: readonly string[] = []): string {
+  let sanitized = message
+  // Redact longer candidates first so a full configured value (e.g. a whole
+  // "Bearer xyz" header) is matched and replaced with one [redacted] before
+  // any of its shorter parts (e.g. just "xyz") get a chance to match inside
+  // what's left, which would otherwise leave stray [redacted] fragments.
+  const candidates = [...new Set(secretValues.flatMap(expandSecretCandidates))].sort((a, b) => b.length - a.length)
+  for (const secret of candidates) {
+    // A very short "secret" (e.g. an empty default, or a short whitespace-
+    // separated token) would redact common substrings across the whole
+    // message instead of the intended value, so these are skipped here.
+    // They may still leak into lastError uncensored - see the ServerStatus
+    // doc comment.
+    if (secret.length < 3) continue
+    sanitized = sanitized.split(secret).join(REDACTED)
+  }
+
+  sanitized = sanitized.replace(URL_TOKEN_PATTERN, sanitizeUrlToken)
+  sanitized = sanitized.replace(/\s+/g, ' ').trim()
+
+  if (sanitized.length > MAX_ERROR_MESSAGE_LENGTH) {
+    sanitized = `${sanitized.slice(0, MAX_ERROR_MESSAGE_LENGTH)}…`
+  }
+  return sanitized
+}
+
+/** Leading `<scheme> <credential>` auth header words whose credential part is worth redacting on its own. */
+const AUTH_SCHEME_WORDS = /^(bearer|basic|token|bot|apikey)\s+(.+)$/i
+
+/**
+ * Expands one configured secret value (e.g. a full `Authorization` header
+ * value like `Bearer abc123xyz`) into every literal form worth redacting on
+ * its own, since an error message rarely echoes the whole configured value
+ * verbatim — it's more likely to quote just the credential out of a header.
+ * Includes: the full value; each whitespace-separated part of it that's
+ * long enough to not be a common word (>= 8 chars); the credential after a
+ * leading auth scheme word (Bearer/Basic/Token/Bot/ApiKey), regardless of
+ * its own length as long as it's still >= 3 chars; and the percent-encoded
+ * form of each of those, when it differs (a URL-embedded token is often
+ * percent-encoded).
+ */
+function expandSecretCandidates(secret: string): string[] {
+  const candidates = new Set<string>([secret])
+
+  for (const part of secret.split(/\s+/)) {
+    if (part.length >= 8) candidates.add(part)
+  }
+
+  const schemeMatch = secret.match(AUTH_SCHEME_WORDS)
+  if (schemeMatch) candidates.add(schemeMatch[2])
+
+  for (const candidate of [...candidates]) {
+    const encoded = encodeURIComponent(candidate)
+    if (encoded !== candidate) candidates.add(encoded)
+  }
+
+  return [...candidates]
+}
+
+/**
+ * Secret values configured for one server (expanded env for stdio, expanded
+ * headers for remote) — the set {@link sanitizeErrorMessage} redacts (after
+ * expanding each via {@link expandSecretCandidates}) if a connect/reconnect
+ * failure message happens to embed one, or a recognizable part of one,
+ * verbatim.
+ */
+function secretValuesFor(serverConfig: ServerConfig): string[] {
+  const dict = serverConfig.transport === 'stdio' ? serverConfig.env : serverConfig.headers
+  return Object.values(expandEnvVars(dict, process.env, new Set(serverConfig.allowedVars)))
+}
 
 export interface ServerInstance {
   client: Client
@@ -18,6 +135,27 @@ export interface ResourceResponse {
   html: string
   csp?: Record<string, string[]>
   permissions?: Record<string, string[]>
+}
+
+/**
+ * Read-only, per-server connection status. Deliberately excludes everything
+ * that could leak configuration secrets: no `command`, `args`, `env`,
+ * `headers`, or `url` — the RPC endpoint that serves this must never grow
+ * one of those back in. `lastError` is only best-effort sanitized by
+ * {@link sanitizeErrorMessage}: it can still contain a short (< 3 char)
+ * secret fragment, or any secret-derived substring the redaction pass
+ * doesn't recognize. `tools`, when present, carries only each tool's
+ * `rawName`/`publicName`/`visibility`/`hasUi` — never `description` or
+ * `inputSchema`.
+ */
+export interface ServerStatus {
+  name: string
+  transport: ServerConfig['transport']
+  connected: boolean
+  toolCount: number
+  uiToolCount: number
+  lastError?: string
+  tools?: ToolSummary[]
 }
 
 export const MAX_TOOLS_PER_SERVER = 256
@@ -63,6 +201,8 @@ export class ServerPool {
   private lastAppliedSeq = new Map<string, number>()
   private lifecycleController = new AbortController()
   private startupTasks = new Map<string, Promise<void>>()
+  /** Last connect/reconnect failure message per server, cleared on the next successful connect. Never holds env/headers/args. */
+  private lastErrors = new Map<string, string>()
 
   constructor(ctx: Context, config: Config, toolManager: ServerToolManager) {
     this.ctx = ctx
@@ -83,6 +223,8 @@ export class ServerPool {
             } catch (err) {
               if (!this.lifecycleController.signal.aborted) {
                 console.error(`mcp-apps: failed to connect to server "${name}":`, err)
+                const rawMessage = err instanceof Error ? err.message : String(err)
+                this.lastErrors.set(name, sanitizeErrorMessage(rawMessage, secretValuesFor(serverConfig)))
               }
             } finally {
               this.startupTasks.delete(name)
@@ -161,6 +303,7 @@ export class ServerPool {
     })
 
     await this.refreshTools(serverName, client)
+    this.lastErrors.delete(serverName)
   }
 
   private async refreshTools(serverName: string, client: Client): Promise<void> {
@@ -194,6 +337,25 @@ export class ServerPool {
     return this.toolManager.getUiToolsSnapshot()
   }
 
+  /**
+   * Read-only status of every configured server. Deliberately built from
+   * only the fields on {@link ServerStatus} — never spreads `serverConfig`
+   * or any part of it, so a future config field can't leak here by accident.
+   */
+  getStatusSnapshot(): ServerStatus[] {
+    return Object.entries(this.config.servers).map(([name, serverConfig]) => {
+      const { toolCount, uiToolCount } = this.toolManager.getToolCounts(name)
+      return {
+        name,
+        transport: serverConfig.transport,
+        connected: this.servers.has(name),
+        toolCount,
+        uiToolCount,
+        lastError: this.lastErrors.get(name),
+        tools: this.toolManager.getToolSummaries(name),
+      }
+    })
+  }
 
   async listResources(serverName: string): Promise<unknown> {
     const instance = this.servers.get(serverName)
@@ -361,6 +523,8 @@ export class ServerPool {
           this.reconnectAttempts.delete(serverName)
         } catch (err) {
           console.error(`mcp-apps: reconnect attempt failed for "${serverName}":`, err)
+          const rawMessage = err instanceof Error ? err.message : String(err)
+          this.lastErrors.set(serverName, sanitizeErrorMessage(rawMessage, secretValuesFor(serverConfig)))
         } finally {
           this.startupTasks.delete(serverName)
         }

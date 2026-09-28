@@ -27,6 +27,19 @@ export interface UiToolDescriptor {
   resourceUri: string
 }
 
+/**
+ * Minimal, name-only summary of one tool as of the last sync, for the
+ * read-only status UI. Deliberately excludes `description` and
+ * `inputSchema` — those can carry server-authored free text or schema
+ * details we don't want surfacing over the unauthenticated status RPC.
+ */
+export interface ToolSummary {
+  rawName: string
+  publicName: string
+  visibility: 'model' | 'app' | 'both'
+  hasUi: boolean
+}
+
 export interface ToolsService {
   register(definition: unknown): () => void
 }
@@ -46,6 +59,10 @@ export class ServerToolManager {
   private disposers = new Map<string, Map<string, () => void>>()
   private fingerprints = new Map<string, Map<string, string>>()
   private uiTools = new Map<string, UiToolDescriptor>()
+  /** Count of every tool seen for a server in its last sync (model + app-only), for `getToolCounts`. Cleared on eviction. */
+  private toolCounts = new Map<string, number>()
+  /** Name/visibility/hasUi summary of every tool seen for a server in its last sync, for `getToolSummaries`. Cleared on eviction, alongside `toolCounts`. */
+  private toolSummaries = new Map<string, ToolSummary[]>()
 
   private onUiToolsChanged?: () => void
   private defaultTimeoutMs?: number
@@ -78,6 +95,8 @@ export class ServerToolManager {
       }
     }
     const assignedPublicNames = new Set<string>()
+    let nextServerToolCount = 0
+    const nextServerToolSummaries: ToolSummary[] = []
 
     const isAllowed = serverConfig?.allowAppToolCalls === true || serverConfig?.allowAppToolCalls === 'allow' || serverConfig?.allowAppToolCalls === 'approve'
     const allowedReverseTools = isAllowed
@@ -106,6 +125,10 @@ export class ServerToolManager {
             publicName = `${publicName.slice(0, 55)}_${disambigHash}`
           }
           assignedPublicNames.add(publicName)
+          // Every tool that reaches here is exposed by this plugin in some
+          // form (model-visible registration and/or a ui:// app resource),
+          // so it counts toward toolCount even if it's app-only below.
+          nextServerToolCount++
 
           if (resourceUri) {
             nextServerUiTools.set(publicName, {
@@ -116,8 +139,21 @@ export class ServerToolManager {
             })
           }
 
+          const isAppOnly = isToolVisibilityAppOnly(tool)
+          const visibility: ToolSummary['visibility'] = isAppOnly
+            ? 'app'
+            : isToolVisibilityModelOnly(tool)
+              ? 'model'
+              : 'both'
+          nextServerToolSummaries.push({
+            rawName: tool.name,
+            publicName,
+            visibility,
+            hasUi: Boolean(resourceUri),
+          })
+
           // App-only tools must not be registered with the LLM in ctx.tools
-          if (isToolVisibilityAppOnly(tool)) {
+          if (isAppOnly) {
             continue
           }
 
@@ -242,6 +278,8 @@ export class ServerToolManager {
 
       this.disposers.set(serverName, nextServerDisposers)
       this.fingerprints.set(serverName, nextServerFingerprints)
+      this.toolCounts.set(serverName, nextServerToolCount)
+      this.toolSummaries.set(serverName, nextServerToolSummaries)
       this.onUiToolsChanged?.()
     }
   }
@@ -259,6 +297,8 @@ export class ServerToolManager {
       this.disposers.delete(serverName)
       this.fingerprints.delete(serverName)
     }
+    this.toolCounts.delete(serverName)
+    this.toolSummaries.delete(serverName)
     for (const [pubName, descriptor] of this.uiTools.entries()) {
       if (descriptor.serverName === serverName) {
         this.uiTools.delete(pubName)
@@ -273,10 +313,42 @@ export class ServerToolManager {
     }
     this.uiTools.clear()
     this.fingerprints.clear()
+    this.toolCounts.clear()
+    this.toolSummaries.clear()
   }
 
   getUiToolsSnapshot(): UiToolDescriptor[] {
     return Array.from(this.uiTools.values())
+  }
+
+  /**
+   * Tool counts for one server: `toolCount` is every tool this plugin
+   * exposes in some form as of the last sync (model-visible tools
+   * registered with the host, plus app-only tools that are never
+   * registered with the host but are still reachable via a `ui://`
+   * resource), `uiToolCount` is the subset backed by a `ui://` resource.
+   * `uiToolCount` is always <= `toolCount`. Note `toolCount` can exceed
+   * `this.disposers.get(serverName)?.size`, since app-only tools have no
+   * disposer. Used by the read-only status endpoint; never exposes tool
+   * names, arguments, or server config.
+   */
+  getToolCounts(serverName: string): { toolCount: number; uiToolCount: number } {
+    const toolCount = this.toolCounts.get(serverName) ?? 0
+    let uiToolCount = 0
+    for (const descriptor of this.uiTools.values()) {
+      if (descriptor.serverName === serverName) uiToolCount++
+    }
+    return { toolCount, uiToolCount }
+  }
+
+  /**
+   * Name/visibility/`hasUi` summary of every tool seen for a server in its
+   * last sync (empty array if the server has never synced or was evicted).
+   * Used by the read-only status endpoint; never includes `description` or
+   * `inputSchema`.
+   */
+  getToolSummaries(serverName: string): ToolSummary[] {
+    return this.toolSummaries.get(serverName) ?? []
   }
 }
 
