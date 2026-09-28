@@ -59,6 +59,18 @@ describe('client plugin discovery and tool view registration', () => {
     vi.restoreAllMocks()
   })
 
+  it('registers the plugins.detail.section status entry with the required list-slot id', async () => {
+    const call = vi.fn(async () => ({ ok: true as const, value: [] }))
+    const fixture = makeContext(call)
+    const dispose = apply(fixture.context as never)
+
+    expect(fixture.register).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'plugins.detail.section', id: expect.any(String) }),
+      expect.any(Function),
+    )
+    dispose()
+  })
+
   it('keeps discovering UI tools that become available after the old eight-second retry window', async () => {
     vi.useFakeTimers()
     const call = vi.fn(async () => ({ ok: true as const, value: call.mock.calls.length >= 4 ? [makeTool()] : [] }))
@@ -68,7 +80,9 @@ describe('client plugin discovery and tool view registration', () => {
     await vi.advanceTimersByTimeAsync(15_000)
 
     expect(call).toHaveBeenCalledTimes(4)
-    expect(fixture.register).toHaveBeenCalledTimes(1)
+    // +1 for the always-on, synchronous `plugins.detail.section` status
+    // section registration alongside the discovered tool view.
+    expect(fixture.register).toHaveBeenCalledTimes(2)
     dispose()
   })
 
@@ -79,16 +93,18 @@ describe('client plugin discovery and tool view registration', () => {
       .mockResolvedValueOnce({ ok: true, value: [] })
     const fixture = makeContext(call)
     const dispose = apply(fixture.context as never)
-    await vi.waitFor(() => expect(fixture.register).toHaveBeenCalledTimes(1))
+    // Baseline 1 is the always-on, synchronous `plugins.detail.section`
+    // status section registration; the tool view adds the 2nd.
+    await vi.waitFor(() => expect(fixture.register).toHaveBeenCalledTimes(2))
 
     fixture.reconnect()
-    await vi.waitFor(() => expect(fixture.register).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(fixture.register).toHaveBeenCalledTimes(3))
 
     expect(fixture.components.get('analytics_render_chart')).toBeDefined()
 
     fixture.reconnect()
     await vi.waitFor(() => expect(fixture.components.has('analytics_render_chart')).toBe(false))
-    expect(fixture.register).toHaveBeenCalledTimes(2)
+    expect(fixture.register).toHaveBeenCalledTimes(3)
     dispose()
   })
 
@@ -106,6 +122,8 @@ describe('client plugin discovery and tool view registration', () => {
 
     resolveFirst({ ok: true, value: [] })
     await vi.waitFor(() => expect(fixture.register).toHaveBeenCalledTimes(1))
+    // Baseline 1 is the status section; no tool view was registered here
+    // since the resolved list was empty.
     expect(call).toHaveBeenCalledTimes(2)
     dispose()
   })
@@ -125,7 +143,11 @@ describe('client plugin discovery and tool view registration', () => {
     await vi.advanceTimersByTimeAsync(15_000)
 
     expect(call).toHaveBeenCalledTimes(1)
-    expect(fixture.register).not.toHaveBeenCalled()
+    // The only register() call is the always-on, synchronous
+    // `plugins.detail.section` status section registration made during
+    // `apply()`; the late-settling tool discovery must not add another.
+    expect(fixture.register).toHaveBeenCalledTimes(1)
+    expect(fixture.components.has('analytics_render_chart')).toBe(false)
   })
 
   it('passes a frozen settled result to the registered view and preserves app disclosure and result delivery', async () => {
@@ -220,6 +242,106 @@ describe('client plugin discovery and tool view registration', () => {
       method: 'ui/notifications/tool-result',
       params: { content: [{ type: 'text', text: 'chart ready' }], structuredContent: { points: [1, 2] } },
     }), '*')
+
+    await act(async () => root.unmount())
+    dispose()
+  })
+
+  it('re-asserts the enclosing Turn disclosure when the host folds it on a later commit', async () => {
+    const tool = makeTool()
+    const html = '<!doctype html><html><body>app</body></html>'
+    const call = vi.fn(async (_channel: string, endpoint: string) => endpoint === 'resources/read'
+      ? { ok: true as const, value: { uri: tool.resourceUri, html } }
+      : { ok: true as const, value: [tool] })
+    const fixture = makeContext(call)
+    const dispose = apply(fixture.context as never)
+    await vi.waitFor(() => expect(fixture.components.get(tool.publicName)).toBeDefined())
+
+    const hostProps = {
+      callId: 'call-1',
+      toolName: tool.publicName,
+      block: {
+        kind: 'result',
+        callId: 'call-1',
+        call: { name: tool.publicName, argsRaw: '{}' },
+        isError: false,
+        content: [{ type: 'text', text: 'chart ready' }],
+        meta: {
+          mcpApp: {
+            serverName: tool.serverName,
+            rawToolName: tool.rawName,
+            resourceUri: tool.resourceUri,
+            sessionToken: 'session-1',
+            result: { content: [{ type: 'text', text: 'chart ready' }] },
+          },
+        },
+      },
+      openFile: vi.fn(),
+      loadImage: vi.fn(),
+    }
+
+    const turn = document.createElement('div')
+    turn.setAttribute('data-turn-process', 'turn-1')
+    const toggle = document.createElement('button')
+    toggle.setAttribute('data-turn-process', 'turn-1')
+    toggle.setAttribute('data-open', '')
+    const member = document.createElement('div')
+    const container = document.createElement('div')
+    member.appendChild(container)
+    turn.append(toggle, member)
+    document.body.appendChild(turn)
+
+    const view = fixture.components.get(tool.publicName)!
+    const root: Root = createRoot(container)
+    vi.stubGlobal('__PKG_VERSION__', 'test')
+    // Stand in for the host's own toggle handler: the real host flips its
+    // stored disclosure state (and so `data-open`) when the button is clicked.
+    let toggleClicks = 0
+    toggle.addEventListener('click', () => {
+      toggleClicks += 1
+      toggle.setAttribute('data-open', '')
+    })
+    await act(async () => {
+      root.render(React.createElement(view, hostProps))
+    })
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+
+    // Start controlling timers so the simulated host commit below is the only
+    // thing that changes afterwards. Discovery is stopped first because its 5s
+    // poll would otherwise loop indefinitely under fake timers.
+    dispose()
+    vi.useFakeTimers()
+
+    // The host folds the completed Turn on a later commit: the toggle loses
+    // data-open and the member wrapper is hidden.
+    await act(async () => {
+      toggle.removeAttribute('data-open')
+      member.setAttribute('hidden', 'until-found')
+      await vi.advanceTimersByTimeAsync(3_600)
+    })
+
+    expect(member.hasAttribute('hidden')).toBe(false)
+    expect(toggle.hasAttribute('data-open')).toBe(true)
+
+    // A reader who deliberately folds the Turn is not fought. Their intent can
+    // only be read back after the gesture's click has been handled, so the
+    // fold is applied and then given a moment to settle.
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+      toggle.removeAttribute('data-open')
+      member.setAttribute('hidden', 'until-found')
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    const clicksAfterUserFold = toggleClicks
+
+    // Once settled the loop stops: it neither re-expands the folded Turn nor
+    // strips the wrapper's hidden state again on a later host commit.
+    await act(async () => {
+      member.setAttribute('hidden', 'until-found')
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    expect(toggleClicks).toBe(clicksAfterUserFold)
+    expect(member.hasAttribute('hidden')).toBe(true)
 
     await act(async () => root.unmount())
     dispose()

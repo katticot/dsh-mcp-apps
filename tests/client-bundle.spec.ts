@@ -78,7 +78,11 @@ describe('browser client artifact', () => {
       },
       slots: {
         inject: (_name: string, effect: () => () => void) => effect(),
-        register: (_descriptor: unknown, view: (props: any) => React.ReactElement) => {
+        register: (descriptor: { name: string }, view: (props: any) => React.ReactElement) => {
+          // The plugin also registers a `plugins.detail.section` status
+          // component alongside the tool view; only the latter is under
+          // test here.
+          if (descriptor.name !== 'tool.call.toolview') return () => undefined
           component = view
           return () => { component = undefined }
         },
