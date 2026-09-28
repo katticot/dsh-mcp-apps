@@ -37,6 +37,9 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./dsh/cordis.patch.yml"
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-connection",
@@ -49,13 +52,16 @@
     "lib/index.js",
     "lib/client.js",
     "lib/**/*.d.ts",
+    "dsh/cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "icon.svg"
   ],
   "engines": {
     "node": ">=22.0.0"
   },
   "packageManager": "pnpm@11.22.0",
+  "icon": "./icon.svg",
   "scripts": {
     "build": "tsdown",
     "test": "vitest run",
@@ -74,6 +80,7 @@
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh-agent": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-connection": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-tool": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-subprocess": "^0.1.7-rc.2",
@@ -81,6 +88,9 @@
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-plugin-manager": {
       "optional": true
     },
     "@deepseek-ai/dsh-user-approval": {

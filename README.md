@@ -49,68 +49,89 @@ See [docs/dsh-compatibility.md](docs/dsh-compatibility.md) for how the check wor
 
 ## Install
 
+### Via the DSH Harness UI
+
+1. Open DSH Harness and click **Plugins** in the sidebar.
+
+   ![Plugins nav](docs/screenshots/dsh-plugins-nav.png)
+
+2. Click **+ Add plugin**, then enter one of the following and click **Install**:
+   - GitHub repository address: `https://github.com/katticot/dsh-mcp-apps`
+   - Package name: `dsh-mcp-apps` (Official npm registry)
+   - Local plugin directory: absolute path to your clone
+
+   ![Add plugin dialog](docs/screenshots/dsh-add-plugin-dialog.png)
+
+### Via the CLI
+
 ```bash
 pnpm dlx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add dsh-mcp-apps
 ```
 
 This forwards to `pnpm` inside your DSH **profile directory** (`$DSH_HOME/profiles/web`), not your current project — it adds `dsh-mcp-apps` to that profile's own `package.json`. Don't run a plain `pnpm add dsh-mcp-apps` in an unrelated project and expect it to do anything for DSH.
 
-Installing alone does not activate the plugin — you still need to add it to your profile's config (next section) so the loader picks it up.
+`dsh-mcp-apps` ships as a DSH **bundle** (`package.json#dsh.bundle`): installing it also activates it, whether you install it through the UI or the CLI above. The package's own `dsh/cordis.patch.yml` inserts a single `id: mcp-apps` row with an empty server map, so the plugin is loaded (with no servers configured yet) as soon as it's installed — you don't hand-write that `insert:` yourself, and you shouldn't (see [Configure](#configure) below).
 
 ## Configure
 
-Add the plugin to your profile's patch file, e.g. `~/.dsh/profiles/web/cordis.patch.yml`. This file is a top-level YAML array of loader patch entries; to **add** a new plugin (rather than override an existing one by `id`), wrap it in an `insert:` list:
+The plugin is already loaded with an empty `servers: {}` by the bundle patch above. To add servers, **patch** that same row from your own profile's patch file (e.g. `~/.dsh/profiles/web/cordis.patch.yml`) — a top-level entry (no `insert:`) that targets the existing `id: mcp-apps`:
 
 ```yaml
-- insert:
-    - id: mcp-apps
-      name: 'dsh-mcp-apps'
-      config:
-        servers:
-          # A remote server speaking Streamable HTTP or SSE
-          my-server:
-            transport: streamable-http
-            url: 'https://your-mcp-server.example.com/mcp'
+- id: mcp-apps
+  config:
+    servers:
+      # A remote server speaking Streamable HTTP or SSE
+      my-server:
+        transport: streamable-http
+        url: 'https://your-mcp-server.example.com/mcp'
 
-          # An OAuth-protected remote server, proxied through mcp-remote
-          my-oauth-server:
-            transport: stdio
-            command: npx
-            args: [-y, mcp-remote@0.1.37, 'https://your-mcp-server.example.com/mcp']
+      # An OAuth-protected remote server, proxied through mcp-remote
+      my-oauth-server:
+        transport: stdio
+        command: npx
+        args: [-y, mcp-remote@0.1.37, 'https://your-mcp-server.example.com/mcp']
 ```
 
-A bare top-level entry (no `insert:`) is treated as a **patch to an existing `id`** and fails with `entry "<id>" not found` if that id isn't already present — it will not create a new plugin entry.
+A patch **replaces the targeted row's whole `config`** — it doesn't merge — so restate every key you want (including `defaultTimeoutMs` and every server, not just the one you're adding or changing).
+
+Do **not** wrap this in `insert:`. `insert:` creates a *new* row; since the bundle already inserted one `id: mcp-apps` row for you, inserting a second one gives you two plugin instances both registering the same `/api/mcp-apps/*` RPC routes, which throws (`connection: exact Fetch route "..." is already registered`) — see [Migrating from 0.2.x](#migrating-from-02x) if you have an older `insert:`-based entry lying around.
 
 A fuller example, showing environment expansion, headers, and reverse tool-calls:
 
 ```yaml
-- insert:
-    - id: mcp-apps
-      name: 'dsh-mcp-apps'
-      config:
-        defaultTimeoutMs: 30000
-        servers:
-          # Local stdio subprocess (env values support ${VAR} / ${VAR:-default} expansion)
-          local-tool:
-            transport: stdio
-            command: go
-            args: ['run', 'main.go']
-            cwd: '/path/to/mcp-server'
-            env:
-              DATABASE_URL: '${DATABASE_URL}'
-            toolCallTimeoutMs: 45000
-            allowAppToolCalls: approve
+- id: mcp-apps
+  config:
+    defaultTimeoutMs: 30000
+    servers:
+      # Local stdio subprocess (env values support ${VAR} / ${VAR:-default} expansion)
+      local-tool:
+        transport: stdio
+        command: go
+        args: ['run', 'main.go']
+        cwd: '/path/to/mcp-server'
+        env:
+          DATABASE_URL: '${DATABASE_URL}'
+        toolCallTimeoutMs: 45000
+        allowAppToolCalls: approve
 
-          # Remote SSE server with an auth header
-          remote-analytics:
-            transport: sse
-            url: 'https://mcp.example.com/sse'
-            headers:
-              Authorization: 'Bearer ${MCP_TOKEN}'
-            allowedVars: [MCP_TOKEN]   # secret-shaped vars are blocked unless listed
-            reconnectOptions:
-              maxRetries: 10
+      # Remote SSE server with an auth header
+      remote-analytics:
+        transport: sse
+        url: 'https://mcp.example.com/sse'
+        headers:
+          Authorization: 'Bearer ${MCP_TOKEN}'
+        allowedVars: [MCP_TOKEN]   # secret-shaped vars are blocked unless listed
+        reconnectOptions:
+          maxRetries: 10
 ```
+
+### Migrating from 0.2.x
+
+Before 0.2.3, this package wasn't a bundle — you activated it yourself with an `- insert: - id: <anything> \n  name: dsh-mcp-apps` entry in your profile's `cordis.patch.yml`. Since installing now activates the plugin automatically (via the package's own bundle patch), **that old `insert:` entry is a second, duplicate instance** and must be removed:
+
+1. Delete your old `- insert:` block that named `dsh-mcp-apps` (whatever `id` you gave it) from your profile's `cordis.patch.yml`.
+2. Replace it with a bare patch entry targeting `id: mcp-apps` (no `insert:`), restating your `servers` config as shown above.
+3. Run `npx @deepseek-ai/dsh --profile web --dump-config` and confirm exactly **one** row with `name: dsh-mcp-apps` appears. Two rows means duplicate servers and a crash on load (see above) — remove whichever `insert:` you added.
 
 ## Run & verify
 
@@ -164,7 +185,7 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
 - **The app's button does nothing**: `allowAppToolCalls` defaults to `deny`. Set it to `approve` or `allow`. Under `approve`, the call also needs an open, running agent turn to prompt for approval — it fails with `unavailable` outside of that window.
 - **Remote connection rejected**: plain `http://` is only allowed to a loopback host (`localhost`, `127.0.0.1`, `::1`); anything else must be `https://`.
 - **Nothing renders**: the client UI only loads under the **web** profile (`dsh.client.platform: "web"`). It won't render in `tui`, `headless`, or other profiles.
-- **Plugin doesn't seem to load**: check that your patch entry uses the `insert:` shape (see [Configure](#configure)) — a bare top-level `- id:` entry is a patch to an *existing* id and errors instead of registering a new plugin. Run `npx @deepseek-ai/dsh --profile web --patch <file> --dump-config` to print the composed config and confirm your entry appears.
+- **Plugin doesn't seem to load / two `dsh-mcp-apps` rows**: the plugin activates itself on install (it's a bundle) with an `id: mcp-apps` row — your own profile patch should target that same id with a bare top-level entry (no `insert:`, see [Configure](#configure)). An `insert:` there creates a *second* row, which crashes on load (duplicate `/api/mcp-apps/*` RPC route registration); see [Migrating from 0.2.x](#migrating-from-02x). Run `npx @deepseek-ai/dsh --profile web --patch <file> --dump-config` to print the composed config and confirm exactly one `name: dsh-mcp-apps` row appears.
 - **`Plugin dsh-mcp-apps@X.Y.Z is incompatible with dsh <version>: peerDependencies {...}`**: your DSH runtime version doesn't satisfy this plugin's `@deepseek-ai/dsh-*` peer ranges. Check the [compatibility table](#compatibility) — `dsh-mcp-apps@0.2.2+` requires DSH `>= 0.1.7-rc.2`; upgrade DSH, or install an older plugin version matched to your DSH release.
 
 ## How it works
