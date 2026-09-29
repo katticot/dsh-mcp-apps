@@ -28,6 +28,12 @@ export interface StdioServerConfig {
   maxMessageBytes?: number
 }
 
+export interface OAuthOptions {
+  clientId?: string
+  clientSecret?: string
+  scopes?: string[]
+}
+
 export interface RemoteServerConfig {
   transport: 'sse' | 'streamable-http'
   url: string
@@ -40,6 +46,8 @@ export interface RemoteServerConfig {
   allowedVars?: string[]
   /** Maximum size in bytes of a single incoming message (an SSE event or a streamable-http response body). Default 16MB. */
   maxMessageBytes?: number
+  /** Enables OAuth for this remote server. `true` uses dynamic client registration; an object statically configures a client. Remote-transport only — `stdio` servers use the `mcp-remote` workaround instead. */
+  oauth?: true | OAuthOptions
 }
 
 export type ServerConfig = StdioServerConfig | RemoteServerConfig
@@ -47,6 +55,8 @@ export type ServerConfig = StdioServerConfig | RemoteServerConfig
 export interface Config {
   servers: Record<string, ServerConfig>
   defaultTimeoutMs?: number
+  /** This DSH host's own externally reachable base URL (e.g. `https://dsh.example.com`), used to build the OAuth `redirect_uri` for `oauth`-enabled servers. Required for OAuth — never derived from an inbound request (that value is caller-controlled and cannot be trusted for a redirect URI baked into dynamic client registration). */
+  externalUrl?: string
 }
 
 const AppToolCallsSchema = Schema.union([
@@ -77,6 +87,17 @@ const StdioSchema: Schema<StdioServerConfig> = Schema.object({
   maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES).description('Maximum size in bytes of a single incoming stdio message (bytes buffered since the last newline). Default 16MB.'),
 }).description('Local process (stdio)')
 
+const OAuthOptionsSchema: Schema<OAuthOptions> = Schema.object({
+  clientId: Schema.string().description('Statically registered OAuth client ID. Omit to use dynamic client registration (RFC 7591).'),
+  clientSecret: Schema.string().role('secret').description('Statically registered OAuth client secret, if the authorization server issued one. Never returned to clients.'),
+  scopes: Schema.array(String).description('OAuth scopes to request during authorization.'),
+}).description('Static OAuth client configuration.')
+
+const OAuthSchema = Schema.union([
+  Schema.const(true),
+  OAuthOptionsSchema,
+]).description('Enables OAuth for this remote server. `true` uses dynamic client registration; an object statically configures a client ID/secret/scopes.')
+
 const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   transport: Schema.union([
     Schema.const('sse'),
@@ -90,6 +111,7 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   allowedPermissions: Schema.array(String).default([]).description('Iframe permissions (e.g. "camera", "microphone", "geolocation") this server\'s MCP Apps may request.'),
   allowedVars: Schema.array(String).default([]).description('Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read.'),
   maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES).description('Maximum size in bytes of a single incoming message (an SSE event or a streamable-http response body). Default 16MB.'),
+  oauth: OAuthSchema,
 }).description('Remote server (SSE / streamable HTTP)')
 
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 30000
@@ -117,6 +139,7 @@ const ServerNameSchema = Schema.string()
 export const Config: Schema<Config> = Schema.object({
   servers: Schema.dict(Schema.union([StdioSchema, RemoteSchema]).required(), ServerNameSchema).default({}).description('MCP servers to host, keyed by a name unique within this plugin.'),
   defaultTimeoutMs: Schema.number().min(1).default(30000).role('ms').description('Fallback tool-call timeout, in milliseconds, used by any server that does not set its own `toolCallTimeoutMs`.'),
+  externalUrl: Schema.string().pattern(REMOTE_URL_PATTERN).description('This DSH host\'s own externally reachable base URL, used to build the OAuth `redirect_uri` for any `oauth`-enabled server. Required for OAuth; never derived from an inbound request.'),
 })
 
 import { DSH_ENV_PREFIX, SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'

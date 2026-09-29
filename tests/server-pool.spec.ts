@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { ServerPool, sanitizeErrorMessage } from '../src/transports/server-pool'
+import { ServerPool, sanitizeErrorMessage, formatErrorMessage } from '../src/transports/server-pool'
 import { ServerToolManager } from '../src/tool-manager'
 import { AppSessionStore } from '../src/session-store'
 
@@ -453,5 +453,53 @@ describe('sanitizeErrorMessage', () => {
   it('redacts the full configured value as a single [redacted], not once per derived part', () => {
     const sanitized = sanitizeErrorMessage('Authorization: Bearer abc123xyz', ['Bearer abc123xyz'])
     expect(sanitized).toBe('Authorization: [redacted]')
+  })
+})
+
+describe('formatErrorMessage', () => {
+  it('includes cause message when available', () => {
+    const cause = new Error('Connect Timeout Error (attempted address: example.com:443, timeout: 10000ms)')
+    const err = new TypeError('fetch failed', { cause })
+    expect(formatErrorMessage(err)).toBe('fetch failed (Connect Timeout Error (attempted address: example.com:443, timeout: 10000ms))')
+  })
+
+  it('includes cause code when cause has a code', () => {
+    const cause = { code: 'UND_ERR_CONNECT_TIMEOUT' }
+    const err = new TypeError('fetch failed', { cause })
+    expect(formatErrorMessage(err)).toBe('fetch failed (UND_ERR_CONNECT_TIMEOUT)')
+  })
+
+  it('returns plain message when no cause exists', () => {
+    const err = new Error('Connection refused')
+    expect(formatErrorMessage(err)).toBe('Connection refused')
+  })
+
+  it('converts non-Error to string', () => {
+    expect(formatErrorMessage('string error')).toBe('string error')
+    expect(formatErrorMessage(123)).toBe('123')
+  })
+})
+
+describe('ServerPool retryServer', () => {
+  it('throws if server is not configured', async () => {
+    const pool = new ServerPool({} as any, { servers: {} }, { getUiToolsSnapshot: () => [] } as any)
+    await expect(pool.retryServer('missing')).rejects.toThrow(/not configured/)
+  })
+
+  it('cancels pending reconnect timer, resets attempts, and calls startServer', async () => {
+    const pool = new ServerPool({} as any, {
+      servers: { srv: { transport: 'stdio', command: 'cmd' } },
+    }, { getUiToolsSnapshot: () => [] } as any)
+
+    const timer = setTimeout(() => {}, 10000)
+    ;(pool as any).reconnectTimers.set('srv', timer)
+    ;(pool as any).reconnectAttempts.set('srv', 4)
+
+    const startSpy = vi.spyOn(pool, 'startServer').mockResolvedValue()
+    await pool.retryServer('srv')
+
+    expect((pool as any).reconnectTimers.has('srv')).toBe(false)
+    expect((pool as any).reconnectAttempts.has('srv')).toBe(false)
+    expect(startSpy).toHaveBeenCalledOnce()
   })
 })

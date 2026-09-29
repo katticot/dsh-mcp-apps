@@ -1,11 +1,21 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/app-bridge'
+import {
+  UnauthorizedError,
+  discoverOAuthServerInfo,
+  exchangeAuthorization,
+  registerClient,
+  startAuthorization,
+  type OAuthClientProvider,
+} from '@modelcontextprotocol/sdk/client/auth.js'
 import type { Context } from '@deepseek-ai/cordis'
-import { expandEnvVars, resolveToolCallTimeoutMs, type Config, type ServerConfig } from '../config'
+import { expandEnvVars, resolveToolCallTimeoutMs, type Config, type OAuthOptions, type ServerConfig } from '../config'
 import type { ServerToolManager, UiToolDescriptor, ToolSummary } from '../tool-manager'
 import { createStdioTransport, type ManagedStdio } from './subprocess'
 import { createRemoteTransport } from './remote'
+import { OAuthTokenStore } from './oauth-token-store'
+import { RemoteOAuthProvider } from './oauth-provider'
 
 /** Replacement text for a redacted secret or a stripped URL query/fragment/userinfo. */
 const REDACTED = '[redacted]'
@@ -79,6 +89,34 @@ export function sanitizeErrorMessage(message: string, secretValues: readonly str
   return sanitized
 }
 
+/**
+ * Extracts a concise, human-readable error description from an error,
+ * including root-cause details for Node.js `TypeError: fetch failed` or network errors
+ * (e.g. ConnectTimeoutError, ECONNREFUSED) without dumping multi-line stack traces.
+ */
+export function formatErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    const cause = (err as { cause?: unknown }).cause
+    if (cause instanceof Error) {
+      const causeMsg = cause.message
+      if (causeMsg && causeMsg !== err.message) {
+        return `${err.message} (${causeMsg})`
+      }
+    } else if (cause && typeof cause === 'object') {
+      const msg = (cause as { message?: unknown }).message
+      const code = (cause as { code?: unknown }).code
+      if (typeof msg === 'string' && msg && msg !== err.message) {
+        return `${err.message} (${msg})`
+      }
+      if (typeof code === 'string' && code) {
+        return `${err.message} (${code})`
+      }
+    }
+    return err.message
+  }
+  return String(err)
+}
+
 /** Leading `<scheme> <credential>` auth header words whose credential part is worth redacting on its own. */
 const AUTH_SCHEME_WORDS = /^(bearer|basic|token|bot|apikey)\s+(.+)$/i
 
@@ -119,9 +157,9 @@ function expandSecretCandidates(secret: string): string[] {
  * failure message happens to embed one, or a recognizable part of one,
  * verbatim.
  */
-function secretValuesFor(serverConfig: ServerConfig): string[] {
+function secretValuesFor(serverConfig: ServerConfig, extra: string[] = []): string[] {
   const dict = serverConfig.transport === 'stdio' ? serverConfig.env : serverConfig.headers
-  return Object.values(expandEnvVars(dict, process.env, new Set(serverConfig.allowedVars)))
+  return [...Object.values(expandEnvVars(dict, process.env, new Set(serverConfig.allowedVars))), ...extra]
 }
 
 export interface ServerInstance {
@@ -146,7 +184,8 @@ export interface ResourceResponse {
  * secret fragment, or any secret-derived substring the redaction pass
  * doesn't recognize. `tools`, when present, carries only each tool's
  * `rawName`/`publicName`/`visibility`/`hasUi` — never `description` or
- * `inputSchema`.
+ * `inputSchema`. `oauth`, when present, carries only a coarse `state` —
+ * never a token value.
  */
 export interface ServerStatus {
   name: string
@@ -156,6 +195,7 @@ export interface ServerStatus {
   uiToolCount: number
   lastError?: string
   tools?: ToolSummary[]
+  oauth?: { state: 'unauthenticated' | 'authenticated' | 'expired' }
 }
 
 export const MAX_TOOLS_PER_SERVER = 256
@@ -203,6 +243,10 @@ export class ServerPool {
   private startupTasks = new Map<string, Promise<void>>()
   /** Last connect/reconnect failure message per server, cleared on the next successful connect. Never holds env/headers/args. */
   private lastErrors = new Map<string, string>()
+  private oauthTokenStore = new OAuthTokenStore()
+  private oauthProviders = new Map<string, RemoteOAuthProvider>()
+  /** Set when a connect attempt against an oauth-enabled server's stored tokens throws `UnauthorizedError`; cleared on a successful connect or fresh tokens. Never holds a token value. */
+  private oauthNeedsAuth = new Map<string, boolean>()
 
   constructor(ctx: Context, config: Config, toolManager: ServerToolManager) {
     this.ctx = ctx
@@ -222,9 +266,11 @@ export class ServerPool {
               await this.startServer(name, serverConfig, this.lifecycleController.signal)
             } catch (err) {
               if (!this.lifecycleController.signal.aborted) {
-                console.error(`mcp-apps: failed to connect to server "${name}":`, err)
-                const rawMessage = err instanceof Error ? err.message : String(err)
-                this.lastErrors.set(name, sanitizeErrorMessage(rawMessage, secretValuesFor(serverConfig)))
+                const rawMessage = formatErrorMessage(err)
+                const sanitized = sanitizeErrorMessage(rawMessage, secretValuesFor(serverConfig, this.oauthSecretCandidates(name)))
+                this.lastErrors.set(name, sanitized)
+                console.warn(`mcp-apps: failed to connect to server "${name}": ${sanitized}`)
+                this.scheduleReconnect(name)
               }
             } finally {
               this.startupTasks.delete(name)
@@ -271,11 +317,41 @@ export class ServerPool {
     if (serverConfig.transport === 'stdio') {
       managedStdio = createStdioTransport(serverConfig)
       disposeTransport = managedStdio.dispose
-      await client.connect(managedStdio.transport)
+      try {
+        await client.connect(managedStdio.transport)
+      } catch (err) {
+        await managedStdio.dispose().catch(() => void 0)
+        await client.close().catch(() => void 0)
+        throw err
+      }
     } else {
-      const remote = createRemoteTransport(serverConfig)
+      let authProvider: OAuthClientProvider | undefined
+      if (serverConfig.oauth) {
+        authProvider = this.getOrCreateOAuthProvider(serverName, serverConfig.oauth)
+        if (!this.oauthTokenStore.getTokens(serverName)) {
+          // Not yet authenticated: don't attempt to connect (and don't let
+          // the SDK's internal auth() perform a premature dynamic client
+          // registration against an unset redirect origin) — wait for
+          // `oauth/authorize` + `oauth/callback` to obtain a token and call
+          // `retryAuth`.
+          return
+        }
+      }
+
+      const remote = createRemoteTransport(serverConfig, authProvider, this.lifecycleController.signal)
       disposeTransport = () => remote.close()
-      await client.connect(remote)
+      try {
+        await client.connect(remote)
+      } catch (err) {
+        await remote.close().catch(() => void 0)
+        await client.close().catch(() => void 0)
+        if (err instanceof UnauthorizedError) {
+          this.oauthNeedsAuth.set(serverName, true)
+          return
+        }
+        throw err
+      }
+      this.oauthNeedsAuth.delete(serverName)
     }
 
     if (isAborted()) {
@@ -353,6 +429,13 @@ export class ServerPool {
         uiToolCount,
         lastError: this.lastErrors.get(name),
         tools: this.toolManager.getToolSummaries(name),
+        oauth: serverConfig.transport === 'stdio' || !serverConfig.oauth ? undefined : {
+          state: !this.oauthTokenStore.getTokens(name)
+            ? 'unauthenticated' as const
+            : this.oauthNeedsAuth.get(name)
+              ? 'expired' as const
+              : 'authenticated' as const,
+        },
       }
     })
   }
@@ -481,7 +564,10 @@ export class ServerPool {
   handleServerClose(serverName: string): void {
     this.toolManager.evictServer(serverName)
     this.servers.delete(serverName)
+    this.scheduleReconnect(serverName)
+  }
 
+  private scheduleReconnect(serverName: string): void {
     if (this.lifecycleController.signal.aborted) return
 
     const serverConfig = this.config.servers[serverName]
@@ -521,10 +607,13 @@ export class ServerPool {
         try {
           await this.startServer(serverName, serverConfig, this.lifecycleController.signal)
           this.reconnectAttempts.delete(serverName)
+          this.lastErrors.delete(serverName)
         } catch (err) {
-          console.error(`mcp-apps: reconnect attempt failed for "${serverName}":`, err)
-          const rawMessage = err instanceof Error ? err.message : String(err)
-          this.lastErrors.set(serverName, sanitizeErrorMessage(rawMessage, secretValuesFor(serverConfig)))
+          const rawMessage = formatErrorMessage(err)
+          const sanitized = sanitizeErrorMessage(rawMessage, secretValuesFor(serverConfig, this.oauthSecretCandidates(serverName)))
+          this.lastErrors.set(serverName, sanitized)
+          console.warn(`mcp-apps: reconnect attempt ${attempts + 1} failed for "${serverName}": ${sanitized}`)
+          this.scheduleReconnect(serverName)
         } finally {
           this.startupTasks.delete(serverName)
         }
@@ -533,6 +622,217 @@ export class ServerPool {
       await task
     }, delay)
     this.reconnectTimers.set(serverName, timer)
+  }
+
+  private getOrCreateOAuthProvider(serverName: string, options: true | OAuthOptions): RemoteOAuthProvider {
+    let provider = this.oauthProviders.get(serverName)
+    if (!provider) {
+      provider = new RemoteOAuthProvider(serverName, options, this.config.externalUrl ?? '', this.oauthTokenStore)
+      this.oauthProviders.set(serverName, provider)
+    }
+    return provider
+  }
+
+  /** Extra redaction candidates for {@link sanitizeErrorMessage}: this server's current access/refresh token, if any. */
+  private oauthSecretCandidates(serverName: string): string[] {
+    const tokens = this.oauthTokenStore.getTokens(serverName)
+    if (!tokens) return []
+    return [tokens.accessToken, tokens.refreshToken].filter((v): v is string => typeof v === 'string')
+  }
+
+  /** Sanitizes an error for one server the same way a connect/reconnect failure is (see `sanitizeErrorMessage`), for callers outside this class (e.g. the `oauth/*` RPC handlers in `src/index.ts`) that surface an error for an unauthenticated caller. */
+  sanitizeError(serverName: string, err: unknown): string {
+    const serverConfig = this.config.servers[serverName]
+    const rawMessage = err instanceof Error ? err.message : String(err)
+    if (!serverConfig) return sanitizeErrorMessage(rawMessage)
+    return sanitizeErrorMessage(rawMessage, secretValuesFor(serverConfig, this.oauthSecretCandidates(serverName)))
+  }
+
+  /** Serializes async work per server name (a promise chain keyed by `serverName`), so two concurrent `oauth/authorize` calls for the same not-yet-registered server can't each perform their own dynamic client registration and race to persist a different client. */
+  private oauthLocks = new Map<string, Promise<unknown>>()
+  private withOAuthLock<T>(serverName: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.oauthLocks.get(serverName) ?? Promise.resolve()
+    const run = prior.then(fn, fn)
+    this.oauthLocks.set(serverName, run.then(() => void 0, () => void 0))
+    return run
+  }
+
+  /**
+   * Resolves the authorize URL for an oauth-enabled server: performs RFC
+   * 9728/8414 discovery, registers a dynamic client if none is configured or
+   * already registered, then calls the SDK's low-level `startAuthorization`
+   * directly instead of the `auth()` orchestrator — `auth()` is built to
+   * drive an interactive flow itself (redirecting a user agent it controls),
+   * but the authorize URL here has to be handed back over RPC for the
+   * caller's own browser to open, so this plugin never lets `auth()` (or
+   * `redirectToAuthorization`, see `RemoteOAuthProvider`) drive that part;
+   * `completeOAuthCallback` below likewise calls `exchangeAuthorization`
+   * directly rather than going through `auth()`.
+   *
+   * The redirect URI is built from `Config.externalUrl`, never from a
+   * request: an inbound request's own URL/Host header is caller-controlled
+   * and would let an anonymous caller poison this server's persisted OAuth
+   * client registration (`registerClient` below) with an attacker-chosen
+   * redirect target.
+   */
+  async getAuthorizeUrl(serverName: string): Promise<string> {
+    const serverConfig = this.config.servers[serverName]
+    if (!serverConfig || serverConfig.transport === 'stdio' || !serverConfig.oauth) {
+      throw new Error(`Server "${serverName}" is not configured for OAuth`)
+    }
+    if (!this.config.externalUrl) {
+      throw new Error('OAuth requires `externalUrl` to be configured on this plugin (see README.md#configure)')
+    }
+    const oauth = serverConfig.oauth
+
+    return this.withOAuthLock(serverName, async () => {
+      const provider = this.getOrCreateOAuthProvider(serverName, oauth)
+
+      const { authorizationServerUrl, authorizationServerMetadata, resourceMetadata } = await discoverOAuthServerInfo(serverConfig.url)
+
+      let clientInformation = await provider.clientInformation()
+      if (!clientInformation) {
+        clientInformation = await registerClient(authorizationServerUrl, {
+          metadata: authorizationServerMetadata,
+          clientMetadata: provider.clientMetadata,
+        })
+        await provider.saveClientInformation(clientInformation)
+      }
+
+      const scope = oauth === true ? undefined : oauth.scopes?.join(' ')
+      const state = crypto.randomUUID()
+      const { authorizationUrl, codeVerifier } = await startAuthorization(authorizationServerUrl, {
+        metadata: authorizationServerMetadata,
+        clientInformation,
+        redirectUrl: provider.redirectUrl,
+        scope,
+        state,
+        resource: resourceMetadata ? new URL(resourceMetadata.resource) : undefined,
+      })
+
+      this.oauthTokenStore.setPendingVerifier(serverName, state, codeVerifier)
+      return authorizationUrl.toString()
+    })
+  }
+
+  /**
+   * Completes an authorization-code exchange for the `oauth/callback` route,
+   * stores the resulting tokens, and re-triggers `startServer` for that one
+   * server so it connects with them.
+   */
+  async completeOAuthCallback(serverName: string, code: string, state: string): Promise<void> {
+    const serverConfig = this.config.servers[serverName]
+    if (!serverConfig || serverConfig.transport === 'stdio' || !serverConfig.oauth) {
+      throw new Error(`Server "${serverName}" is not configured for OAuth`)
+    }
+
+    const pending = this.oauthTokenStore.getPendingVerifier(serverName, state)
+    if (!pending) {
+      throw new Error('No matching pending authorization for this state (it may have expired)')
+    }
+
+    const provider = this.getOrCreateOAuthProvider(serverName, serverConfig.oauth)
+    const clientInformation = await provider.clientInformation()
+    if (!clientInformation) {
+      throw new Error(`No OAuth client registered for server "${serverName}"`)
+    }
+
+    const { authorizationServerUrl, authorizationServerMetadata, resourceMetadata } = await discoverOAuthServerInfo(serverConfig.url)
+
+    const tokens = await exchangeAuthorization(authorizationServerUrl, {
+      metadata: authorizationServerMetadata,
+      clientInformation,
+      authorizationCode: code,
+      codeVerifier: pending.codeVerifier,
+      redirectUri: provider.redirectUrl,
+      resource: resourceMetadata ? new URL(resourceMetadata.resource) : undefined,
+    })
+
+    await provider.saveTokens(tokens)
+    this.oauthTokenStore.deletePendingVerifier(serverName, state)
+    this.oauthNeedsAuth.delete(serverName)
+    this.retryAuth(serverName)
+  }
+
+  /** Re-triggers `startServer` for one server after fresh tokens are stored, reusing `startupTasks` bookkeeping to avoid double-connecting. */
+  retryAuth(serverName: string): void {
+    if (this.lifecycleController.signal.aborted) return
+    if (this.startupTasks.has(serverName)) return
+    const serverConfig = this.config.servers[serverName]
+    if (!serverConfig) return
+
+    const task = (async () => {
+      try {
+        await this.startServer(serverName, serverConfig, this.lifecycleController.signal)
+        this.lastErrors.delete(serverName)
+      } catch (err) {
+        const rawMessage = formatErrorMessage(err)
+        const sanitized = sanitizeErrorMessage(rawMessage, secretValuesFor(serverConfig, this.oauthSecretCandidates(serverName)))
+        this.lastErrors.set(serverName, sanitized)
+        console.warn(`mcp-apps: post-auth connect failed for "${serverName}": ${sanitized}`)
+      } finally {
+        this.startupTasks.delete(serverName)
+      }
+    })()
+    this.startupTasks.set(serverName, task)
+  }
+
+  /**
+   * Manually retries connecting to a server (e.g. from the UI "Retry" button).
+   * Resets reconnect backoff counters and cancels any pending timer.
+   */
+  async retryServer(serverName: string): Promise<void> {
+    const serverConfig = this.config.servers[serverName]
+    if (!serverConfig) {
+      throw new Error(`Server "${serverName}" is not configured`)
+    }
+
+    const timer = this.reconnectTimers.get(serverName)
+    if (timer) {
+      clearTimeout(timer)
+      this.reconnectTimers.delete(serverName)
+    }
+    this.reconnectAttempts.delete(serverName)
+
+    await this.startServer(serverName, serverConfig, this.lifecycleController.signal)
+  }
+
+  /**
+   * Disconnects an OAuth-authenticated server, stops any reconnect attempts,
+   * evicts its tools from the host, and clears stored credentials.
+   */
+  async disconnectOAuth(serverName: string): Promise<void> {
+    const serverConfig = this.config.servers[serverName]
+    if (!serverConfig || serverConfig.transport === 'stdio' || !serverConfig.oauth) {
+      throw new Error(`Server "${serverName}" is not configured for OAuth`)
+    }
+
+    return this.withOAuthLock(serverName, async () => {
+      const timer = this.reconnectTimers.get(serverName)
+      if (timer) {
+        clearTimeout(timer)
+        this.reconnectTimers.delete(serverName)
+      }
+      this.reconnectAttempts.delete(serverName)
+
+      const instance = this.servers.get(serverName)
+      if (instance) {
+        instance.client.onclose = undefined
+        this.servers.delete(serverName)
+        this.toolManager.evictServer(serverName)
+        try {
+          await instance.client.close().catch(() => void 0)
+          await instance.disposeTransport().catch(() => void 0)
+        } catch (err) {
+          console.error(`mcp-apps: error closing server "${serverName}" on disconnect:`, err)
+        }
+      }
+
+      this.oauthTokenStore.clear(serverName)
+      this.oauthProviders.delete(serverName)
+      this.oauthNeedsAuth.delete(serverName)
+      this.lastErrors.delete(serverName)
+    })
   }
 
   async stopAll(): Promise<void> {

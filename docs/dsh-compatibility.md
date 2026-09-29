@@ -30,6 +30,8 @@ These Cordis services are host-side dependencies declared by `src/index.ts`'s `i
 
 `@deepseek-ai/dsh-client-ui-slots` supplies the browser slot registry contract used by the DSH tool UI provider. Its published package has no Cordis host `inject` declaration; the UI tool package depends on it and supplies the `slots` client context service.
 
+**`~/.dsh/mcp-apps/oauth/` is a plugin-owned filesystem contract, not a host-provided storage service.** DSH has no `inject`-able key-value or secret store for a plugin to persist OAuth tokens/client registrations against; there simply isn't one in the host services table above. This plugin's `OAuthTokenStore` (`src/transports/oauth-token-store.ts`) instead reads/writes one JSON file per oauth-enabled server directly under the invoking user's home directory, with directory/file permissions (`0700`/`0600`) as the only access control — the same plaintext-plus-permissions trust model already applied to `headers`/`env` secrets elsewhere in this plugin. If a future DSH release adds a real host-provided secret store service, this is the piece that would move onto it.
+
 ## Browser module-loader identifiers
 
 `package.json#dsh.client.inject` contains package module identifiers loaded into the browser's `window.__ModuleLoader__`; these are distinct from Cordis service keys above. `src/client/index.tsx` receives the `connection` and `slots` context services from DSH's client plugin composition.

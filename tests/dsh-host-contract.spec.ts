@@ -34,8 +34,16 @@ describe('DSH host contracts', () => {
     const stopAll = vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)
     apply(ctx as any, config)
 
-    expect(register).toHaveBeenCalledTimes(6)
+    expect(register).toHaveBeenCalledTimes(10)
     expect(routes.has('/api/mcp-apps/tools/list-ui')).toBe(true)
+    expect(routes.has('/api/mcp-apps/oauth/authorize')).toBe(true)
+    expect(routes.get('/api/mcp-apps/oauth/authorize')!.methods).toEqual(['POST'])
+    expect(routes.has('/api/mcp-apps/oauth/disconnect')).toBe(true)
+    expect(routes.get('/api/mcp-apps/oauth/disconnect')!.methods).toEqual(['POST'])
+    expect(routes.has('/api/mcp-apps/servers/retry')).toBe(true)
+    expect(routes.get('/api/mcp-apps/servers/retry')!.methods).toEqual(['POST'])
+    expect(routes.has('/api/mcp-apps/oauth/callback')).toBe(true)
+    expect(routes.get('/api/mcp-apps/oauth/callback')!.methods).toEqual(['GET'])
     const route = routes.get('/api/mcp-apps/tools/list-ui')!
     expect(route.methods).toEqual(['POST'])
     expect(route.requestBody).toBe('buffered')
