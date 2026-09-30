@@ -79,6 +79,13 @@ The plugin is already loaded with an empty `servers: {}` by the bundle patch abo
 ```yaml
 - id: mcp-apps
   config:
+    # Required for any `oauth`-enabled server below: this DSH host's own
+    # externally reachable base URL, used to build the OAuth redirect_uri.
+    # It is never derived from an inbound request (a request's Host header
+    # is caller-controlled and cannot be trusted for a value baked into
+    # dynamic client registration) — set it explicitly to match however this
+    # host is actually reached (localhost, a LAN address, a reverse proxy...).
+    externalUrl: 'http://localhost:PORT'
     servers:
       # A remote server speaking Streamable HTTP or SSE
       my-server:
@@ -90,7 +97,27 @@ The plugin is already loaded with an empty `servers: {}` by the bundle patch abo
         transport: stdio
         command: npx
         args: [-y, mcp-remote@0.1.37, 'https://your-mcp-server.example.com/mcp']
+
+      # An OAuth-protected remote server, handled natively (no mcp-remote)
+      my-native-oauth-server:
+        transport: streamable-http
+        url: 'https://your-mcp-server.example.com/mcp'
+        oauth: true
 ```
+
+`oauth: true` enables native OAuth for `sse`/`streamable-http` servers: dynamic client registration (RFC 7591) plus the authorization-code + PKCE flow, with the "Connect Account" button in the plugin's status UI kicking off the browser-facing part. It's remote-transport only — `stdio` servers keep using the `mcp-remote` proxy above. `oauth` requires the top-level `externalUrl` to be set, and also accepts an object to configure a statically registered client instead of DCR:
+
+```yaml
+      my-static-oauth-server:
+        transport: streamable-http
+        url: 'https://your-mcp-server.example.com/mcp'
+        oauth:
+          clientId: 'my-client-id'
+          clientSecret: '${OAUTH_CLIENT_SECRET}'
+          scopes: [read, write]
+```
+
+Tokens (and any dynamically registered client) are stored per server in `~/.dsh/mcp-apps/oauth/<server-name>.json` (plaintext, `0600`/`0700` permissions — the same access-controlled-not-encrypted trust model this plugin already applies to `headers`/`env` secrets).
 
 A patch **replaces the targeted row's whole `config`** — it doesn't merge — so restate every key you want (including `defaultTimeoutMs` and every server, not just the one you're adding or changing).
 
@@ -162,6 +189,7 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
 | :--- | :--- | :--- | :--- |
 | `servers` | `Record<string, ServerConfig>` | `{}` | Map of server identifiers to transport configs. Names cannot contain `__` or end with `_`. |
 | `defaultTimeoutMs` | `number` | `30000` | Fallback timeout in ms for tool calls (must be `>= 1`). |
+| `externalUrl` | `string` | — | This DSH host's own externally reachable base URL (`http(s)://...`), used to build the OAuth `redirect_uri` for any `servers.<id>.oauth`-enabled server. Required if any server has `oauth` set; never derived from an inbound request. |
 | `servers.<id>.transport` | `'stdio' \| 'sse' \| 'streamable-http'` | *(Required)* | Transport mechanism. Only transports defined by the MCP specification are supported: `stdio`, `streamable-http`, and `sse` (deprecated upstream, kept for older servers). |
 | `servers.<id>.command` | `string` | — | Executable binary path (for `stdio`). |
 | `servers.<id>.args` | `string[]` | `[]` | Command arguments (for `stdio`). |
@@ -175,6 +203,7 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
 | `servers.<id>.allowedPermissions` | `string[]` | `[]` | Allowlist for `camera`, `microphone`, and `geolocation` iframe permissions requested by a resource's UI metadata; all three are denied unless explicitly listed here. Other permission keys pass through unfiltered into the iframe's `allow` attribute. |
 | `servers.<id>.allowedVars` | `string[]` | `[]` | Env var names this server may read via `${VAR}` expansion (in `env` or `headers`) despite being `DSH_*`-prefixed, secret-shaped (`KEY`/`PASSWORD`/`SECRET`/`TOKEN`), or an agent socket (`SSH_AUTH_SOCK`, `GPG_AGENT_INFO`), which are blocked by default. E.g. `allowedVars: ['API_TOKEN']` lets `headers: { Authorization: 'Bearer ${API_TOKEN}' }` resolve (for `stdio`, `sse`, `streamable-http`). |
 | `servers.<id>.maxMessageBytes` | `number` | `16777216` (16MB) | Maximum size in bytes of a single incoming message (for `stdio`, `sse`, `streamable-http`; must be `>= 1`). For `stdio` this is the bytes buffered since the last newline (one JSON-RPC line); for remote transports it caps each individual SSE event or response body (not the total stream lifetime) via a byte-counting wrapper around `fetch`. Protects against a malicious or misbehaving MCP server exhausting host memory. |
+| `servers.<id>.oauth` | `true \| { clientId?, clientSecret?, scopes?: string[] }` | — | Enables native OAuth for this server (for `sse`, `streamable-http` only). `true` uses dynamic client registration; an object statically configures a client ID/secret/scopes instead. `clientSecret` is treated as a secret like `headers` values. Tokens are stored in `~/.dsh/mcp-apps/oauth/<server-name>.json`. |
 
 `${VAR}` / `${VAR:-default}` expansion only applies to `env` and `headers` values — not to `url`, `args`, or `cwd`. `$$` is an escaped literal `$`. A default value cannot itself contain a nested `${...}` expansion (e.g. `${MISSING:-${PORT}}` is taken literally, not expanded recursively).
 
@@ -187,6 +216,7 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
 - **Nothing renders**: the client UI only loads under the **web** profile (`dsh.client.platform: "web"`). It won't render in `tui`, `headless`, or other profiles.
 - **Plugin doesn't seem to load / two `dsh-mcp-apps` rows**: the plugin activates itself on install (it's a bundle) with an `id: mcp-apps` row — your own profile patch should target that same id with a bare top-level entry (no `insert:`, see [Configure](#configure)). An `insert:` there creates a *second* row, which crashes on load (duplicate `/api/mcp-apps/*` RPC route registration); see [Migrating from 0.2.x](#migrating-from-02x). Run `npx @deepseek-ai/dsh --profile web --patch <file> --dump-config` to print the composed config and confirm exactly one `name: dsh-mcp-apps` row appears.
 - **`Plugin dsh-mcp-apps@X.Y.Z is incompatible with dsh <version>: peerDependencies {...}`**: your DSH runtime version doesn't satisfy this plugin's `@deepseek-ai/dsh-*` peer ranges. Check the [compatibility table](#compatibility) — `dsh-mcp-apps@0.2.2+` requires DSH `>= 0.1.7-rc.2`; upgrade DSH, or install an older plugin version matched to your DSH release.
+- **OAuth popup doesn't complete / server stuck on "Requires Auth"**: check that `externalUrl` is set (`oauth/authorize` fails immediately with a clear error if it isn't) and that it matches an address the browser can actually reach back to for the callback. Click **Connect Account** again — a stale authorize attempt's PKCE verifier expires after 10 minutes. Make sure the popup isn't blocked by the browser and that it's able to reach both the authorization server and `externalUrl`. If the authorization server rejects the callback with a redirect_uri mismatch, `externalUrl` changed since the client was registered — clear `~/.dsh/mcp-apps/oauth/<server-name>.json` to force fresh dynamic client registration and try again.
 
 ## How it works
 

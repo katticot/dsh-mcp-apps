@@ -10,6 +10,8 @@ export interface ToolSummary {
   hasUi: boolean
 }
 
+export type OAuthState = 'unauthenticated' | 'authenticated' | 'expired'
+
 export interface ServerStatus {
   name: string
   transport: string
@@ -18,6 +20,7 @@ export interface ServerStatus {
   uiToolCount: number
   lastError?: string
   tools?: ToolSummary[]
+  oauth?: { state: OAuthState }
 }
 
 export interface McpAppsStatusSectionProps {
@@ -27,6 +30,14 @@ export interface McpAppsStatusSectionProps {
 }
 
 const VALID_VISIBILITIES = new Set<ToolVisibility>(['model', 'app', 'both'])
+const VALID_OAUTH_STATES = new Set<OAuthState>(['unauthenticated', 'authenticated', 'expired'])
+
+function parseOAuthStatus(value: unknown): { state: OAuthState } | null {
+  if (typeof value !== 'object' || value === null) return null
+  const item = value as Record<string, unknown>
+  if (typeof item.state !== 'string' || !VALID_OAUTH_STATES.has(item.state as OAuthState)) return null
+  return { state: item.state as OAuthState }
+}
 
 function parseToolSummary(value: unknown): ToolSummary | null {
   if (typeof value !== 'object' || value === null) return null
@@ -66,6 +77,7 @@ function parseServerStatus(value: unknown): ServerStatus | null {
   const tools = Array.isArray(item.tools)
     ? item.tools.map(parseToolSummary).filter((t): t is ToolSummary => t !== null)
     : undefined
+  const oauth = item.oauth !== undefined ? parseOAuthStatus(item.oauth) ?? undefined : undefined
   return {
     name: item.name,
     transport: item.transport,
@@ -74,6 +86,7 @@ function parseServerStatus(value: unknown): ServerStatus | null {
     uiToolCount: item.uiToolCount,
     lastError: typeof item.lastError === 'string' ? item.lastError : undefined,
     tools,
+    oauth,
   }
 }
 
@@ -217,6 +230,7 @@ export function McpAppsStatusSection({ connection, on }: McpAppsStatusSectionPro
         <ServerRow
           key={server.name}
           server={server}
+          connection={connection}
           isExpanded={expanded.has(server.name)}
           onToggle={() => toggleExpanded(server.name)}
         />
@@ -254,8 +268,68 @@ function highlightMatch(text: string, needle: string): React.ReactNode {
   )
 }
 
-function ServerRow({ server, isExpanded, onToggle }: { server: ServerStatus; isExpanded: boolean; onToggle: () => void }) {
+function ServerRow({ server, connection, isExpanded, onToggle }: { server: ServerStatus; connection: ClientConnectionRpc; isExpanded: boolean; onToggle: () => void }) {
   const [filter, setFilter] = useState('')
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [connecting, setConnecting] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+
+  const handleConnectAccount = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setAuthError(null)
+    setConnecting(true)
+    try {
+      const res = await connection.rpc.call('/api', 'mcp-apps/oauth/authorize', { server: server.name })
+      if (!res.ok) {
+        setAuthError(res.error.message)
+        return
+      }
+      const value = res.value as { authorizeUrl?: unknown } | null
+      if (!value || typeof value.authorizeUrl !== 'string') {
+        setAuthError('Host returned an invalid authorize response')
+        return
+      }
+      window.open(value.authorizeUrl, '_blank', 'popup')
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setConnecting(false)
+    }
+  }
+
+  const handleDisconnectAccount = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setAuthError(null)
+    setDisconnecting(true)
+    try {
+      const res = await connection.rpc.call('/api', 'mcp-apps/oauth/disconnect', { server: server.name })
+      if (!res.ok) {
+        setAuthError(res.error.message)
+        return
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
+  const handleRetryServer = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setAuthError(null)
+    setRetrying(true)
+    try {
+      const res = await connection.rpc.call('/api', 'mcp-apps/servers/retry', { server: server.name })
+      if (!res.ok) {
+        setAuthError(res.error.message)
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   const groups = useMemo(() => {
     const tools = server.tools ?? []
@@ -296,6 +370,73 @@ function ServerRow({ server, isExpanded, onToggle }: { server: ServerStatus; isE
         <span style={MUTED_TEXT_STYLE}>
           {server.toolCount} tools ({server.uiToolCount} UI)
         </span>
+        {server.oauth && server.oauth.state !== 'authenticated' ? (
+          <>
+            <span style={OAUTH_BADGE_STYLE}>Requires Auth</span>
+            {/* A `<span role="button">`, not a real nested `<button>`, since this
+                already sits inside the row's own toggle `<button>` and HTML
+                forbids nesting interactive elements. */}
+            <span
+              role="button"
+              tabIndex={connecting ? -1 : 0}
+              aria-disabled={connecting}
+              onClick={handleConnectAccount}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  void handleConnectAccount(e as unknown as React.MouseEvent)
+                }
+              }}
+              style={{ ...CONNECT_BUTTON_STYLE, opacity: connecting ? 0.6 : 1, cursor: connecting ? 'default' : 'pointer' }}
+            >
+              {connecting ? 'Connecting…' : 'Connect Account'}
+            </span>
+          </>
+        ) : null}
+        {server.oauth && server.oauth.state === 'authenticated' ? (
+          <span
+            role="button"
+            tabIndex={disconnecting ? -1 : 0}
+            aria-disabled={disconnecting}
+            onClick={handleDisconnectAccount}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                void handleDisconnectAccount(e as unknown as React.MouseEvent)
+              }
+            }}
+            style={{ ...DISCONNECT_BUTTON_STYLE, opacity: disconnecting ? 0.6 : 1, cursor: disconnecting ? 'default' : 'pointer' }}
+            title={`Disconnect ${server.name}`}
+          >
+            {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+          </span>
+        ) : null}
+        {!server.connected && (!server.oauth || server.oauth.state === 'authenticated') ? (
+          <span
+            role="button"
+            tabIndex={retrying ? -1 : 0}
+            aria-disabled={retrying}
+            onClick={handleRetryServer}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                void handleRetryServer(e as unknown as React.MouseEvent)
+              }
+            }}
+            style={{ ...RETRY_BUTTON_STYLE, opacity: retrying ? 0.6 : 1, cursor: retrying ? 'default' : 'pointer' }}
+            title={`Retry connecting to ${server.name}`}
+          >
+            {retrying ? 'Retrying…' : 'Retry'}
+          </span>
+        ) : null}
+        {authError ? (
+          <span style={ERROR_TEXT_STYLE} title={authError}>
+            {authError}
+          </span>
+        ) : null}
         {server.lastError ? (
           <span style={ERROR_TEXT_STYLE} title={server.lastError}>
             {server.lastError}
@@ -428,6 +569,33 @@ const TRANSPORT_CHIP_STYLE: React.CSSProperties = {
 const MUTED_TEXT_STYLE: React.CSSProperties = {
   color: 'var(--dsw-alias-label-tertiary, rgba(0, 0, 0, 0.6))',
   fontSize: 11,
+}
+
+const OAUTH_BADGE_STYLE: React.CSSProperties = {
+  ...PILL_STYLE,
+  color: 'var(--dsw-alias-state-warning-primary, #b54708)',
+  flex: '0 0 auto',
+}
+
+const CONNECT_BUTTON_STYLE: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  padding: '2px 8px',
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  border: '1px solid var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.2))',
+  color: 'inherit',
+  background: 'transparent',
+  flex: '0 0 auto',
+}
+
+const DISCONNECT_BUTTON_STYLE: React.CSSProperties = {
+  ...CONNECT_BUTTON_STYLE,
+  color: 'var(--dsw-alias-label-secondary, inherit)',
+}
+
+const RETRY_BUTTON_STYLE: React.CSSProperties = {
+  ...CONNECT_BUTTON_STYLE,
+  color: 'inherit',
 }
 
 const ERROR_TEXT_STYLE: React.CSSProperties = {

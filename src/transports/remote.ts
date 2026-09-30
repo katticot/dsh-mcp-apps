@@ -1,6 +1,7 @@
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { FetchLike, Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import { expandEnvVars, type RemoteServerConfig } from '../config'
 import { DEFAULT_MAX_MESSAGE_BYTES } from '../constants'
 
@@ -93,7 +94,7 @@ export function createByteCappedFetch(baseFetch: FetchLike, maxMessageBytes: num
   }
 }
 
-export function createRemoteTransport(config: RemoteServerConfig): Transport {
+export function createRemoteTransport(config: RemoteServerConfig, authProvider?: OAuthClientProvider, signal?: AbortSignal): Transport {
   const url = new URL(config.url)
   // URL.hostname keeps the brackets around an IPv6 literal (e.g. "[::1]");
   // strip them so bare-host comparisons work.
@@ -107,25 +108,27 @@ export function createRemoteTransport(config: RemoteServerConfig): Transport {
   const expandedHeaders = expandEnvVars(config.headers, process.env, new Set(config.allowedVars))
   const maxMessageBytes = config.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES
   const cappedFetch = createByteCappedFetch(fetch, maxMessageBytes)
+  const requestInit = {
+    headers: expandedHeaders,
+    signal,
+  }
 
   switch (config.transport) {
     case 'streamable-http':
       return new StreamableHTTPClientTransport(url, {
-        requestInit: {
-          headers: expandedHeaders,
-        },
+        requestInit,
         fetch: cappedFetch,
+        authProvider,
       })
 
     case 'sse':
       return new SSEClientTransport(url, {
-        requestInit: {
-          headers: expandedHeaders,
-        },
+        requestInit,
         eventSourceInit: {
           fetch: cappedFetch,
         },
         fetch: cappedFetch,
+        authProvider,
       })
 
     default:

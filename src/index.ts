@@ -60,6 +60,9 @@ export function apply(ctx: Context, config: Config) {
       | { session: import('./session-store').AppSession }
       | { error: ReturnType<typeof failure> }
 
+    const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
+    const OAUTH_CALLBACK_HTML = (body: string) => `<!doctype html><html><body>${escapeHtml(body)}<script>window.close()</script></body></html>`
+
     const requireSession = (params: Record<string, unknown>): SessionResult => {
       const sessionToken = typeof params.sessionToken === 'string' ? params.sessionToken : undefined
       if (!sessionToken) {
@@ -191,6 +194,44 @@ export function apply(ctx: Context, config: Config) {
               return { ok: true as const, value: result }
             }
 
+            case 'oauth/authorize': {
+              // No session token: starting an auth flow for a server the
+              // caller can already see in `servers/status` carries nothing
+              // sensitive on its own.
+              const server = typeof params.server === 'string' ? params.server : undefined
+              if (!server) return failure('bad-request', 'Missing server parameter')
+              try {
+                const authorizeUrl = await pool.getAuthorizeUrl(server)
+                return { ok: true as const, value: { authorizeUrl } }
+              } catch (err) {
+                return failure('internal-error', pool.sanitizeError(server, err))
+              }
+            }
+
+            case 'oauth/disconnect': {
+              const server = typeof params.server === 'string' ? params.server : undefined
+              if (!server) return failure('bad-request', 'Missing server parameter')
+              try {
+                await pool.disconnectOAuth(server)
+                notifyUiToolsChanged()
+                return { ok: true as const, value: { disconnected: true } }
+              } catch (err) {
+                return failure('internal-error', pool.sanitizeError(server, err))
+              }
+            }
+
+            case 'servers/retry': {
+              const server = typeof params.server === 'string' ? params.server : undefined
+              if (!server) return failure('bad-request', 'Missing server parameter')
+              try {
+                await pool.retryServer(server)
+                notifyUiToolsChanged()
+                return { ok: true as const, value: { retried: true } }
+              } catch (err) {
+                return failure('internal-error', pool.sanitizeError(server, err))
+              }
+            }
+
             default:
               return failure('bad-request', `Unknown endpoint "${endpoint}"`)
           }
@@ -207,8 +248,8 @@ export function apply(ctx: Context, config: Config) {
       }
     }
 
-    const endpoints = ['tools/list-ui', 'servers/status', 'resources/list', 'resources/read', 'resources/read-raw', 'tools/call'] as const
-    const unregisterFetchRoutes = endpoints.map(endpoint => connectionFetch.register({
+    const endpoints = ['tools/list-ui', 'servers/status', 'resources/list', 'resources/read', 'resources/read-raw', 'tools/call', 'oauth/authorize', 'oauth/disconnect', 'servers/retry'] as const
+    const unregisterPostRoutes = endpoints.map(endpoint => connectionFetch.register({
       path: `/api/mcp-apps/${endpoint}`,
       methods: ['POST'],
       requestBody: 'buffered',
@@ -231,6 +272,84 @@ export function apply(ctx: Context, config: Config) {
       },
     }))
 
+    const handleOAuthCallback = async (rawUrl: string): Promise<{ status: number; html: string }> => {
+      const url = new URL(rawUrl, 'http://127.0.0.1')
+      const server = url.searchParams.get('server')
+      const code = url.searchParams.get('code')
+      const state = url.searchParams.get('state')
+      const idpError = url.searchParams.get('error')
+
+      if (idpError) {
+        const message = pool.sanitizeError(server ?? '', new Error(idpError))
+        return { status: 400, html: OAUTH_CALLBACK_HTML(`Authorization failed: ${message}`) }
+      }
+      if (!server || !code || !state) {
+        return { status: 400, html: OAUTH_CALLBACK_HTML('Authorization callback is missing required parameters.') }
+      }
+
+      try {
+        await pool.completeOAuthCallback(server, code, state)
+      } catch (err) {
+        const message = pool.sanitizeError(server, err)
+        return { status: 400, html: OAUTH_CALLBACK_HTML(`Authorization failed: ${message}`) }
+      }
+
+      notifyUiToolsChanged()
+      return { status: 200, html: OAUTH_CALLBACK_HTML('Authorization complete. You can close this window.') }
+    }
+
+    // Hit by a real browser navigation from the authorization server, not
+    // by the app's own RPC client — a plain GET returning HTML, not a JSON
+    // RPC envelope.
+    const unregisterCallbackRoute = connectionFetch.register({
+      path: '/api/mcp-apps/oauth/callback',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async request => {
+        const { status, html } = await handleOAuthCallback(request.url)
+        return new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8' } })
+      },
+    })
+
+    // Real browser redirects from external OAuth IdPs arrive with
+    // `Sec-Fetch-Site: cross-site`. DSH's Connection service protects its
+    // `/api` prefix route with `isTrustedApiRequest`, which rejects all
+    // `Sec-Fetch-Site: cross-site` requests with 403 Forbidden.
+    // Registering an exact route directly on WebServer (when available)
+    // takes priority over Connection's prefix match, allowing the OAuth
+    // callback to be received without hitting the cross-site rejection.
+    let unregisterWebServerRoute: (() => void) | undefined
+    const registerOnWebServer = (webServer: any) => {
+      try {
+        const disposer = webServer.register({
+          kind: 'exact',
+          path: '/api/mcp-apps/oauth/callback',
+          handler: async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+            if (req.method !== 'GET') {
+              res.writeHead(405).end()
+              return
+            }
+            const { status, html } = await handleOAuthCallback(req.url ?? '/')
+            res.writeHead(status, {
+              'content-type': 'text/html; charset=utf-8',
+              'cache-control': 'no-store',
+            }).end(html)
+          },
+        })
+        console.info('mcp-apps: registered OAuth callback route directly on webServer')
+        return disposer
+      } catch (err) {
+        console.warn('mcp-apps: failed to register OAuth callback on webServer:', err)
+        return undefined
+      }
+    }
+
+    if (config.externalUrl && typeof ctx.inject === 'function') {
+      ctx.inject(['webServer'], (webCtx: any) => {
+        unregisterWebServerRoute = registerOnWebServer(webCtx.webServer)
+      })
+    }
+
     void pool.startAll()
 
     return async () => {
@@ -244,8 +363,8 @@ export function apply(ctx: Context, config: Config) {
         }
       }
 
-      for (const unregister of unregisterFetchRoutes) {
-        await cleanup(() => unregister())
+      for (const unregister of [...unregisterPostRoutes, unregisterCallbackRoute, unregisterWebServerRoute].filter(Boolean)) {
+        await cleanup(() => (unregister as () => unknown)())
       }
 
       let drainTimer: ReturnType<typeof setTimeout> | undefined

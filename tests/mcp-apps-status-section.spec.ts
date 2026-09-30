@@ -206,4 +206,59 @@ describe('McpAppsStatusSection', () => {
     expect(mark).not.toBeNull()
     expect(mark!.textContent!.toLowerCase()).toBe('chart')
   })
+
+  it('renders a Disconnect button for authenticated OAuth servers and dispatches disconnect RPC on click', async () => {
+    const call = vi.fn(async (_path: string, endpoint: string) => {
+      if (endpoint === 'mcp-apps/servers/status') {
+        return {
+          ok: true as const,
+          value: [makeStatus({ name: 'powerhive', oauth: { state: 'authenticated' } })],
+        }
+      }
+      if (endpoint === 'mcp-apps/oauth/disconnect') {
+        return { ok: true as const, value: { disconnected: true } }
+      }
+      return { ok: true as const, value: [] }
+    })
+    await renderSection(call)
+
+    const disconnectBtn = container!.querySelector('[title="Disconnect powerhive"]') as HTMLSpanElement
+    expect(disconnectBtn).not.toBeNull()
+    expect(disconnectBtn.textContent).toBe('Disconnect')
+
+    await act(async () => {
+      disconnectBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(call).toHaveBeenCalledWith('/api', 'mcp-apps/oauth/disconnect', { server: 'powerhive' })
+    // Ensure clicking Disconnect did NOT expand the row accordion
+    expect(container!.querySelector('[data-mcp-apps-status-detail="powerhive"]')).toBeNull()
+  })
+
+  it('renders a Retry button for disconnected servers and dispatches retry RPC on click', async () => {
+    const call = vi.fn(async (_path: string, endpoint: string) => {
+      if (endpoint === 'mcp-apps/servers/status') {
+        return {
+          ok: true as const,
+          value: [makeStatus({ name: 'powerhive', connected: false, oauth: { state: 'authenticated' }, lastError: 'fetch failed' })],
+        }
+      }
+      if (endpoint === 'mcp-apps/servers/retry') {
+        return { ok: true as const, value: { retried: true } }
+      }
+      return { ok: true as const, value: [] }
+    })
+    await renderSection(call)
+
+    const retryBtn = container!.querySelector('[title="Retry connecting to powerhive"]') as HTMLSpanElement
+    expect(retryBtn).not.toBeNull()
+    expect(retryBtn.textContent).toBe('Retry')
+
+    await act(async () => {
+      retryBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(call).toHaveBeenCalledWith('/api', 'mcp-apps/servers/retry', { server: 'powerhive' })
+    expect(container!.querySelector('[data-mcp-apps-status-detail="powerhive"]')).toBeNull()
+  })
 })
