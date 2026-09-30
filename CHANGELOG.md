@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.4] - 2026-09-30
+
+### Added
+
+- **Remote MCP Server OAuth 2.0 / PKCE Support**:
+  - Secure file-backed OAuth token store (`~/.dsh/mcp-apps/oauth/<server>.json`) with restricted filesystem permissions (`0700` directory, `0600` token file) persisting access tokens, refresh tokens, and dynamic client registration records across DSH restarts.
+  - Full OAuth 2.0 authorization code flow with PKCE (RFC 7636) and metadata discovery (RFC 8414 / RFC 9728).
+  - Dynamic client registration (RFC 7591) support alongside pre-configured static client credentials.
+  - Dedicated `/api/mcp-apps/oauth/callback` web route with popup authentication window coordination via `window.opener.postMessage`.
+  - Disconnect / logout endpoint (`/api/mcp-apps/oauth/disconnect`) and "Disconnect" button in the Plugins UI status section to cleanly revoke tokens and unregister tools.
+  - `externalUrl` configuration setting for deployments behind reverse proxies or external URLs to ensure accurate OAuth redirect URIs.
+- **Resilient Remote Server Lifecycle & Error Handling**:
+  - Concise single-line network error reporting: unwraps nested Node.js/Undici causes (`ConnectTimeoutError`, `UND_ERR_CONNECT_TIMEOUT`, `ECONNREFUSED`) instead of printing raw multi-line stack traces to stdout/stderr.
+  - Exponential backoff with jitter for automatic server reconnection on connection drop or startup failure.
+  - Manual retry RPC endpoint (`/api/mcp-apps/servers/retry`) and interactive "Retry" button on disconnected server rows in the Plugins UI.
+  - Immediate lifecycle shutdown: forwards `lifecycleController.signal` into remote transports so pressing `^C` or shutting down DSH aborts in-flight requests immediately without waiting for HTTP socket timeouts.
+- **UI & Client Status Enhancements**:
+  - Detailed server connection states: "Needs Authorization", "Authenticated", "Connected", and "Disconnected".
+  - Interactive "Connect Account", "Disconnect", and "Retry" buttons on server cards with accessible ARIA semantics and responsive design.
+
+[Compare v0.2.3...v0.2.4](https://github.com/katticot/dsh-mcp-apps/compare/v0.2.3...v0.2.4)
+
 ## [0.2.3] - 2026-09-28
 
 ### Added
@@ -110,6 +132,7 @@ Initial release: Universal MCP Apps (SEP-1865) host & UI plugin for DeepSeek Har
 
 [v0.1.0](https://github.com/katticot/dsh-mcp-apps/releases/tag/v0.1.0)
 
+[0.2.4]: https://github.com/katticot/dsh-mcp-apps/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/katticot/dsh-mcp-apps/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/katticot/dsh-mcp-apps/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/katticot/dsh-mcp-apps/compare/v0.2.0...v0.2.1
