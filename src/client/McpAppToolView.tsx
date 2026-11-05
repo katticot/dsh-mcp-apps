@@ -161,6 +161,7 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
   const bridge = new AppBridge(null, hostInfo, {
     serverTools: {},
     serverResources: {},
+    message: { text: {} },
   })
 
   bridge.oncalltool = async (params, extra) => {
@@ -188,6 +189,17 @@ export function createBridgeLifecycle(options: BridgeLifecycleOptions): BridgeLi
       server: serverName,
       uri: params.uri,
       sessionToken,
+    }, extra?.signal)
+    if (!res.ok) throw new Error(res.error.message)
+    return res.value as never
+  }
+
+  bridge.onmessage = async (params, extra) => {
+    const res = await rpcCall('/api', 'mcp-apps/messages', {
+      sessionToken,
+      server: serverName,
+      role: params.role,
+      content: params.content as unknown,
     }, extra?.signal)
     if (!res.ok) throw new Error(res.error.message)
     return res.value as never

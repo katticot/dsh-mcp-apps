@@ -32,6 +32,9 @@ function htmlForApp(name: string) {
     <p id="result">Waiting for tool result</p>
     <p id="refresh-result">Refresh not called</p>
     <button id="refresh" type="button">Refresh</button>
+    <p id="submit-result">Form not submitted</p>
+    <input id="form-field" type="text" value="Nairobi" />
+    <button id="submit-form" type="button">Submit form</button>
   </main>
   <script type="module">
     import { App } from '${bundleData}';
@@ -55,6 +58,15 @@ function htmlForApp(name: string) {
       } catch (error) {
         refreshed.textContent = 'Refresh rejected: ' + (error?.message ?? String(error));
         console.error('Smoke Refresh failed:', error);
+      }
+    });
+    document.querySelector('#submit-form').addEventListener('click', async () => {
+      const value = document.querySelector('#form-field').value;
+      try {
+        await app.sendMessage({ role: 'user', content: [{ type: 'text', text: 'FORM_SUBMITTED: ' + value }] });
+        document.querySelector('#submit-result').textContent = 'Message sent';
+      } catch (error) {
+        document.querySelector('#submit-result').textContent = 'Message rejected: ' + (error?.message ?? String(error));
       }
     });
     await app.connect();

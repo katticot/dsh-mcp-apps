@@ -28,13 +28,14 @@ describe('DSH host contracts', () => {
         if (typeof disposer === 'function') effectDisposers.push(disposer as () => unknown)
         return vi.fn()
       }),
+      inject: vi.fn((_: string[], factory: (serviceCtx: any) => any) => factory({ agents: undefined })),
     }
 
     const startAll = vi.spyOn(ServerPool.prototype, 'startAll').mockResolvedValue(undefined)
     const stopAll = vi.spyOn(ServerPool.prototype, 'stopAll').mockResolvedValue(undefined)
     apply(ctx as any, config)
 
-    expect(register).toHaveBeenCalledTimes(10)
+    expect(register).toHaveBeenCalledTimes(11)
     expect(routes.has('/api/mcp-apps/tools/list-ui')).toBe(true)
     expect(routes.has('/api/mcp-apps/oauth/authorize')).toBe(true)
     expect(routes.get('/api/mcp-apps/oauth/authorize')!.methods).toEqual(['POST'])
@@ -42,6 +43,8 @@ describe('DSH host contracts', () => {
     expect(routes.get('/api/mcp-apps/oauth/disconnect')!.methods).toEqual(['POST'])
     expect(routes.has('/api/mcp-apps/servers/retry')).toBe(true)
     expect(routes.get('/api/mcp-apps/servers/retry')!.methods).toEqual(['POST'])
+    expect(routes.has('/api/mcp-apps/messages')).toBe(true)
+    expect(routes.get('/api/mcp-apps/messages')!.methods).toEqual(['POST'])
     expect(routes.has('/api/mcp-apps/oauth/callback')).toBe(true)
     expect(routes.get('/api/mcp-apps/oauth/callback')!.methods).toEqual(['GET'])
     const route = routes.get('/api/mcp-apps/tools/list-ui')!
@@ -361,6 +364,7 @@ describe('DSH host contracts', () => {
         if (typeof disposer === 'function') unload = disposer as () => Promise<void>
         return vi.fn()
       }),
+      inject: vi.fn((_: string[], factory: (serviceCtx: any) => any) => factory({ agents: undefined })),
     }
 
     vi.spyOn(ServerPool.prototype, 'startAll').mockResolvedValue(undefined)

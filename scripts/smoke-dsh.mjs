@@ -20,6 +20,8 @@ if (!tarball) {
 }
 const policy = process.argv.find(arg => arg.startsWith('--policy='))?.split('=')[1] ?? 'allow'
 if (!['allow', 'deny', 'approve'].includes(policy)) throw new Error(`Unsupported policy: ${policy}`)
+const messagesPolicy = process.argv.find(arg => arg.startsWith('--messages-policy='))?.split('=')[1] ?? 'approve'
+if (!['allow', 'deny', 'approve'].includes(messagesPolicy)) throw new Error(`Unsupported messages policy: ${messagesPolicy}`)
 
 const work = await mkdtemp(path.join(tmpdir(), 'dsh-mcp-apps-smoke-'))
 const dshHome = path.join(work, 'dsh-home')
@@ -74,7 +76,7 @@ async function appendPluginConfig(defaultTimeoutMs = 30_000) {
   // second `id: mcp-apps` row would register the `/api/mcp-apps/*` RPC
   // routes twice and crash (HostConnectionService throws on a duplicate
   // exact Fetch route).
-  const content = `- id: session-title-llm\n  disabled: true\n- insert:\n    - id: smoke-workspace\n      name: dsh-mcp-apps-smoke-workspace\n- id: mcp-apps\n  config:\n    defaultTimeoutMs: ${defaultTimeoutMs}\n    servers:\n      demo:\n        transport: stdio\n        command: ${JSON.stringify(command)}\n        args: ${JSON.stringify(args)}\n        env:\n          MCP_SMOKE_EVENT_FILE: ${JSON.stringify(eventFile)}\n          DSH_MCP_APPS_SMOKE_POLICY: ${policy}\n        allowAppToolCalls: ${policy}\n`
+  const content = `- id: session-title-llm\n  disabled: true\n- insert:\n    - id: smoke-workspace\n      name: dsh-mcp-apps-smoke-workspace\n- id: mcp-apps\n  config:\n    defaultTimeoutMs: ${defaultTimeoutMs}\n    servers:\n      demo:\n        transport: stdio\n        command: ${JSON.stringify(command)}\n        args: ${JSON.stringify(args)}\n        env:\n          MCP_SMOKE_EVENT_FILE: ${JSON.stringify(eventFile)}\n          DSH_MCP_APPS_SMOKE_POLICY: ${policy}\n        allowAppToolCalls: ${policy}\n        allowAppMessages: ${messagesPolicy}\n`
   await writeFile(path.join(profile, 'cordis.patch.yml'), content)
 }
 function startDsh(port) {
@@ -394,6 +396,27 @@ try {
     const denied = await frame.locator('#refresh-result').textContent()
     if (!denied?.includes(expected)) throw new Error(`${policy} policy did not reject the callback: ${denied}`)
     log(`${policy} policy rejected the app callback (${denied})`)
+  }
+
+  // Form submission (ui/message) — the agent is idle here (the weather turn has settled).
+  const formField = frame.locator('#form-field')
+  await formField.fill('Nairobi')
+  if (messagesPolicy === 'deny') {
+    await frame.locator('#submit-form').click()
+    await frame.locator('text=Message rejected:').waitFor({ timeout: 20_000 })
+    log('messages policy deny rejected the form submission')
+  } else {
+    await frame.locator('#submit-form').click()
+    if (messagesPolicy === 'approve') {
+      const approvalButton = page.getByRole('button', { name: /allow|approve/i }).first()
+      await approvalButton.waitFor({ timeout: 20_000 })
+      log('app-message consent prompt visible while agent idle')
+      await approvalButton.click()
+    }
+    await frame.locator('text=Message sent').waitFor({ timeout: 20_000 })
+    await page.locator('text=FORM_SUBMITTED: Nairobi').waitFor({ timeout: 20_000 })
+    await page.locator('text=app-controlled content').first().waitFor({ timeout: 20_000 })
+    log(`messages policy ${messagesPolicy} delivered the form submission with visible provenance`)
   }
 
   const events = await readEvents()

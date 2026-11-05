@@ -2,8 +2,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { clientRequestSchema } from '@deepseek-ai/dsh-client-connection'
 import type { ConnectionRpcResult, HostConnectionFetch } from '@deepseek-ai/dsh-client-connection'
 import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ApprovalService, ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import { Config } from './config'
+import { Config, normalizeAppMessagesSetting } from './config'
+import { validateAppMessageContent, appMessageProvenancePrefix, sanitizeProvenanceName } from './app-message'
+import { APP_MESSAGE_WINDOW_MS, MAX_APP_MESSAGES_PER_WINDOW } from './constants'
 import { AppSessionStore } from './session-store'
 import { ServerToolManager, type ToolsService } from './tool-manager'
 import { ServerPool } from './transports/server-pool'
@@ -25,7 +28,10 @@ export function apply(ctx: Context, config: Config) {
   const sessionStore = new AppSessionStore()
   let approvalService: ApprovalService | undefined
   let agentsService: AgentRegistry | undefined
-  if (Object.values(config.servers).some(server => server.allowAppToolCalls === 'approve')) {
+  if (Object.values(config.servers).some(server =>
+    server.allowAppToolCalls === 'approve'
+    || normalizeAppMessagesSetting(server.allowAppMessages) === 'approve'
+  )) {
     ctx.inject(['approval'], serviceCtx => {
       const service = serviceCtx.approval
       approvalService = service
@@ -33,14 +39,14 @@ export function apply(ctx: Context, config: Config) {
         if (approvalService === service) approvalService = undefined
       }
     })
-    ctx.inject(['agents'], serviceCtx => {
-      const service = serviceCtx.agents
-      agentsService = service
-      return () => {
-        if (agentsService === service) agentsService = undefined
-      }
-    })
   }
+  ctx.inject(['agents'], serviceCtx => {
+    const service = serviceCtx.agents
+    agentsService = service
+    return () => {
+      if (agentsService === service) agentsService = undefined
+    }
+  })
   const notifyUiToolsChanged = () => {
     try {
       ctx.emit('ui-tools/changed')
@@ -194,6 +200,84 @@ export function apply(ctx: Context, config: Config) {
               return { ok: true as const, value: result }
             }
 
+            case 'messages': {
+              const session = requireSession(params)
+              if ('error' in session) return session.error
+              if (!session.session.agentId) {
+                return failure('unavailable', 'Session is not bound to a running agent')
+              }
+              if (!agentsService) {
+                return failure('unavailable', 'Agent registry is not available')
+              }
+              const agent = agentsService.get(session.session.agentId)
+              if (!agent) {
+                console.warn(`mcp-apps: app message addressed a missing agent ${session.session.agentId} (server ${session.session.serverName})`)
+                return failure('unavailable', 'No live agent for this session')
+              }
+              const role = params.role
+              if (role !== 'user') {
+                return failure('bad-request', `Unsupported message role ${String(role)}`)
+              }
+              const validated = validateAppMessageContent(params.content)
+              if (!validated.ok) return failure('bad-request', validated.reason)
+              const serverConfig = config.servers[session.session.serverName]
+              const messagePolicy = normalizeAppMessagesSetting(serverConfig?.allowAppMessages)
+              if (messagePolicy === 'deny') {
+                return failure('forbidden', 'App messages are disabled for this server')
+              }
+              if (messagePolicy === 'approve' && !session.session.messagesConsentedAt) {
+                const currentApproval = approvalService
+                if (!currentApproval) {
+                  return failure('unavailable', 'Approval service is not available for app messages')
+                }
+                const preview = (validated.content[0]?.text ?? '').replace(/\s+/g, ' ').slice(0, 80)
+                try {
+                  const outcome: ApprovalOutcome = await currentApproval.request({
+                    agent,
+                    toolName: 'mcp-apps/message',
+                    callId: session.session.callId,
+                    reason: `MCP App "${sanitizeProvenanceName(session.session.serverName)}" / "${sanitizeProvenanceName(session.session.rawToolName)}" wants to submit a chat message: "${preview}"`,
+                    signal,
+                  })
+                  if (approvalService !== currentApproval) {
+                    return failure('unavailable', 'Approval service is not available for app messages')
+                  }
+                  if (outcome !== 'allowed-once') {
+                    if (outcome === 'unavailable') return failure('unavailable', 'Approval service is unavailable for app messages')
+                    if (outcome === 'cancelled') return failure('cancelled', 'App message approval was cancelled')
+                    return failure('forbidden', 'App message was rejected')
+                  }
+                  session.session.messagesConsentedAt = Date.now()
+                } catch (err) {
+                  console.warn('mcp-apps: app message approval failed:', err instanceof Error ? err.message : String(err))
+                  return failure('unavailable', 'App message approval failed')
+                }
+              }
+              const now = Date.now()
+              session.session.messageDeliveries = session.session.messageDeliveries.filter(t => now - t < APP_MESSAGE_WINDOW_MS)
+              if (session.session.messageDeliveries.length >= MAX_APP_MESSAGES_PER_WINDOW) {
+                return failure('too-many-requests', 'App message rate limit exceeded for this app session; try again shortly')
+              }
+              try {
+                const content = validated.content.map((block, index) =>
+                  index === 0
+                    ? { type: 'text' as const, text: appMessageProvenancePrefix(sanitizeProvenanceName(session.session.serverName), sanitizeProvenanceName(session.session.rawToolName)) + block.text }
+                    : block
+                )
+                const message = createUserMessage({
+                  content,
+                  source: { kind: 'mcp-apps', server: session.session.serverName, tool: session.session.rawToolName },
+                })
+                agent.followup(message)
+              } catch (err) {
+                console.warn(`mcp-apps: failed to deliver app message to agent ${session.session.agentId}:`, err instanceof Error ? err.message : String(err))
+                return failure('internal-error', 'Failed to deliver message')
+              }
+              session.session.messageDeliveries.push(now)
+              console.info(`mcp-apps: delivered app message server=${session.session.serverName} tool=${session.session.rawToolName} agent=${session.session.agentId} chars=${validated.content.reduce((total, block) => total + block.text.length, 0)}`)
+              return { ok: true as const, value: { delivered: true } }
+            }
+
             case 'oauth/authorize': {
               // No session token: starting an auth flow for a server the
               // caller can already see in `servers/status` carries nothing
@@ -248,7 +332,7 @@ export function apply(ctx: Context, config: Config) {
       }
     }
 
-    const endpoints = ['tools/list-ui', 'servers/status', 'resources/list', 'resources/read', 'resources/read-raw', 'tools/call', 'oauth/authorize', 'oauth/disconnect', 'servers/retry'] as const
+    const endpoints = ['tools/list-ui', 'servers/status', 'resources/list', 'resources/read', 'resources/read-raw', 'tools/call', 'messages', 'oauth/authorize', 'oauth/disconnect', 'servers/retry'] as const
     const unregisterPostRoutes = endpoints.map(endpoint => connectionFetch.register({
       path: `/api/mcp-apps/${endpoint}`,
       methods: ['POST'],

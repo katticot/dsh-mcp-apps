@@ -12,6 +12,19 @@ export interface ReconnectOptions {
 
 export type AppToolCallsSetting = 'deny' | 'approve' | 'allow'
 
+export type AppMessagesSetting = 'deny' | 'approve' | 'allow'
+
+/**
+ * Normalize the per-server app-message policy. A plain boolean is legacy
+ * shorthand (true = 'allow', false = 'deny'); an omitted setting defaults to
+ * 'approve' (consent once per app session).
+ */
+export function normalizeAppMessagesSetting(value: AppMessagesSetting | boolean | undefined): AppMessagesSetting {
+  if (value === true) return 'allow'
+  if (value === false) return 'deny'
+  return value ?? 'approve'
+}
+
 export interface StdioServerConfig {
   transport: 'stdio'
   command: string
@@ -21,6 +34,7 @@ export interface StdioServerConfig {
   toolCallTimeoutMs?: number
   reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
+  allowAppMessages?: AppMessagesSetting | boolean
   allowedPermissions?: string[]
   /** Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read. */
   allowedVars?: string[]
@@ -41,6 +55,7 @@ export interface RemoteServerConfig {
   toolCallTimeoutMs?: number
   reconnectOptions?: ReconnectOptions
   allowAppToolCalls?: AppToolCallsSetting | boolean
+  allowAppMessages?: AppMessagesSetting | boolean
   allowedPermissions?: string[]
   /** Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read. */
   allowedVars?: string[]
@@ -66,6 +81,13 @@ const AppToolCallsSchema = Schema.union([
   Schema.boolean(),
 ]).default(false).description('Whether MCP Apps served by this server may invoke tools back on the host: "deny"/false blocks it, "approve" requires per-call approval, "allow"/true permits it outright.')
 
+const AppMessagesSchema = Schema.union([
+  Schema.const('deny' as const),
+  Schema.const('approve' as const),
+  Schema.const('allow' as const),
+  Schema.boolean(),
+]).default('approve').description('Policy for ui/message (form submission) delivery from this server\'s apps into the agent conversation: "deny"/false blocks it, "approve" asks the human once per app session before the first message, "allow"/true delivers without prompting.')
+
 const ReconnectSchema: Schema<ReconnectOptions> = Schema.object({
   maxRetries: Schema.number().default(5).description('Maximum number of reconnect attempts after the connection closes before giving up.'),
   initialDelayMs: Schema.number().default(1000).role('ms').description('Delay before the first reconnect attempt, in milliseconds.'),
@@ -82,6 +104,7 @@ const StdioSchema: Schema<StdioServerConfig> = Schema.object({
   toolCallTimeoutMs: Schema.number().min(1).default(30000).role('ms').description('Maximum time to wait for a tool call to this server to complete, in milliseconds.'),
   reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
+  allowAppMessages: AppMessagesSchema,
   allowedPermissions: Schema.array(String).default([]).description('Iframe permissions (e.g. "camera", "microphone", "geolocation") this server\'s MCP Apps may request.'),
   allowedVars: Schema.array(String).default([]).description('Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read.'),
   maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES).description('Maximum size in bytes of a single incoming stdio message (bytes buffered since the last newline). Default 16MB.'),
@@ -108,6 +131,7 @@ const RemoteSchema: Schema<RemoteServerConfig> = Schema.object({
   toolCallTimeoutMs: Schema.number().min(1).default(30000).role('ms').description('Maximum time to wait for a tool call to this server to complete, in milliseconds.'),
   reconnectOptions: ReconnectSchema.default({}),
   allowAppToolCalls: AppToolCallsSchema,
+  allowAppMessages: AppMessagesSchema,
   allowedPermissions: Schema.array(String).default([]).description('Iframe permissions (e.g. "camera", "microphone", "geolocation") this server\'s MCP Apps may request.'),
   allowedVars: Schema.array(String).default([]).description('Names normally blocked from `${VAR}` expansion (DSH_*, secret-shaped, agent sockets) that this server may read.'),
   maxMessageBytes: Schema.number().min(1).default(DEFAULT_MAX_MESSAGE_BYTES).description('Maximum size in bytes of a single incoming message (an SSE event or a streamable-http response body). Default 16MB.'),

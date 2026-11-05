@@ -169,7 +169,7 @@ After saving `cordis.patch.yml`, restart the web profile so the loader applies t
 pnpm dlx @deepseek-ai/dsh@0.1.7-rc.2 web
 ```
 
-Call a tool on a configured server that returns a `ui://` resource. Its tool input and result render in a sandboxed iframe with an **Interactive App** badge. App callbacks follow that server's `allowAppToolCalls` policy.
+Call a tool on a configured server that returns a `ui://` resource. Its tool input and result render in a sandboxed iframe with an **Interactive App** badge. Reverse tool calls follow that server's `allowAppToolCalls` policy; form submissions (`ui/message`) follow its `allowAppMessages` policy.
 
 ---
 
@@ -183,6 +183,20 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
   - `'allow'` / `true`: reverse calls are permitted without approval.
   - `'approve'`: each reverse call is routed through `ctx.approval` (`@deepseek-ai/dsh-user-approval`) and requires the originating agent to have an open turn (`agent.status === 'running'`); outside of that window, or if the approval/agent services aren't available, the call fails with `unavailable` rather than silently allowing or hanging.
 - **App-only / model-only visibility**: tools marked app-only (`isToolVisibilityAppOnly`) are never registered with the LLM's tool list, and tools marked model-only (`isToolVisibilityModelOnly`) are excluded from the set an app is allowed to call back into — each direction is a one-way gate.
+
+## App Message (ui/message) Security Model
+
+Rendered apps can submit form content into the agent conversation (`ui/message`, SEP-1865). That path is governed per server:
+
+- **`allowAppMessages` (per server, default `'approve'`)**: a `'deny' | 'approve' | 'allow'` setting (a plain `boolean` is legacy shorthand for `'deny'`/`'allow'`).
+  - `'deny'`: every `ui/message` from that server's apps is rejected with `forbidden`.
+  - `'approve'` (default): the **first** message of each app session asks the human through DSH's approval prompt (the app's server, tool, and a short message preview are shown). Once granted, further messages from the same session flow without prompting. Rejected or unavailable approval fails closed.
+  - `'allow'`: messages are delivered without a consent prompt.
+- **Provenance**: delivered messages are stamped with the durable source `{ kind: 'mcp-apps', server, tool }` and prefixed in the transcript with `[Submitted via MCP App "<server>" / "<tool>" — app-controlled content, not typed by the user]`, so model and reader can tell app-submitted text from typed input. Every delivery is logged host-side (server, tool, agent, size).
+- **Bounds**: max 32,768 characters and 32 blocks per message; whitespace-only content rejected; text containing invisible or bidirectional control characters (e.g. Unicode tag characters, RLO) rejected; max 6 delivered messages per app session per 60s sliding window (`too-many-requests` beyond that).
+- **Scope**: a session token can only reach the agent that invoked its tool, until the session's 1-hour TTL.
+
+Note: the `approve` flow needs an approval answerer (all interactive DSH profiles have one). On a profile without one, set `allowAppMessages: 'allow'` (with the bounds above) or `'deny'`.
 
 ## Configuration Reference
 
@@ -201,6 +215,7 @@ Rendered apps can call back into host tools (e.g. a "Refresh Data" button). That
 | `servers.<id>.toolCallTimeoutMs` | `number` | `30000` | Per-server tool call timeout in ms (must be `>= 1`). |
 | `servers.<id>.reconnectOptions` | `{ maxRetries?, initialDelayMs?, maxDelayMs?, backoffFactor? }` | `{5, 1000, 30000, 1.5}` | Exponential-backoff reconnect tuning, applied on `stdio` and remote (`sse`, `streamable-http`) transports. |
 | `servers.<id>.allowAppToolCalls` | `'deny' \| 'approve' \| 'allow' \| boolean` | `false` (`'deny'`) | Reverse tool-call policy — see [Reverse Tool-Call Security Model](#reverse-tool-call-security-model). |
+| `servers.<id>.allowAppMessages` | `'deny' \| 'approve' \| 'allow' \| boolean` | `'approve'` | Form-submission (`ui/message`) policy — see [App Message (ui/message) Security Model](#app-message-uimessage-security-model). |
 | `servers.<id>.allowedPermissions` | `string[]` | `[]` | Allowlist for `camera`, `microphone`, and `geolocation` iframe permissions requested by a resource's UI metadata; all three are denied unless explicitly listed here. Other permission keys pass through unfiltered into the iframe's `allow` attribute. |
 | `servers.<id>.allowedVars` | `string[]` | `[]` | Env var names this server may read via `${VAR}` expansion (in `env` or `headers`) despite being `DSH_*`-prefixed, secret-shaped (`KEY`/`PASSWORD`/`SECRET`/`TOKEN`), or an agent socket (`SSH_AUTH_SOCK`, `GPG_AGENT_INFO`), which are blocked by default. E.g. `allowedVars: ['API_TOKEN']` lets `headers: { Authorization: 'Bearer ${API_TOKEN}' }` resolve (for `stdio`, `sse`, `streamable-http`). |
 | `servers.<id>.maxMessageBytes` | `number` | `16777216` (16MB) | Maximum size in bytes of a single incoming message (for `stdio`, `sse`, `streamable-http`; must be `>= 1`). For `stdio` this is the bytes buffered since the last newline (one JSON-RPC line); for remote transports it caps each individual SSE event or response body (not the total stream lifetime) via a byte-counting wrapper around `fetch`. Protects against a malicious or misbehaving MCP server exhausting host memory. |

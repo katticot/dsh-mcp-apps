@@ -134,4 +134,82 @@ describe('createBridgeLifecycle (McpAppToolView bridge disposal)', () => {
 
     expect(teardownSpy).toHaveBeenCalledTimes(1)
   })
+
+  it('declares the message capability in the initialize response', async () => {
+    const { contentWindow } = attachIframe()
+    const postMessageSpy = vi.spyOn(contentWindow, 'postMessage')
+    const rpcCall = vi.fn(async () => ({ ok: true as const, value: { delivered: true } }))
+    const handle = createBridgeLifecycle({ contentWindow, sessionToken: 'tok-1', rpcCall, hostInfo: { name: 'h', version: '0' } })
+    cleanups.push(() => handle.dispose(false))
+
+    postInitializeRequest(contentWindow, 1)
+    await vi.waitFor(() => {
+      expect(postMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 1,
+          result: expect.objectContaining({ hostCapabilities: expect.objectContaining({ message: { text: {} } }) }),
+        }),
+        expect.anything(),
+      )
+    })
+  })
+
+  it('forwards ui/message to the mcp-apps/messages endpoint and returns its value', async () => {
+    const { contentWindow } = attachIframe()
+    const postMessageSpy = vi.spyOn(contentWindow, 'postMessage')
+    const rpcCall = vi.fn(async () => ({ ok: true as const, value: { delivered: true } }))
+    const handle = createBridgeLifecycle({ contentWindow, sessionToken: 'tok-1', rpcCall, hostInfo: { name: 'h', version: '0' } })
+    cleanups.push(() => handle.dispose(false))
+
+    postInitializeRequest(contentWindow, 1)
+    await vi.waitFor(() => expect(postMessageSpy).toHaveBeenCalled())
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'ui/message',
+        params: { role: 'user', content: [{ type: 'text', text: 'the answer is 42' }] },
+      },
+      source: contentWindow,
+    }))
+    await vi.waitFor(() => {
+      expect(rpcCall).toHaveBeenCalledWith('/api', 'mcp-apps/messages',
+        expect.objectContaining({ sessionToken: 'tok-1', role: 'user', content: [{ type: 'text', text: 'the answer is 42' }] }),
+        expect.any(AbortSignal))
+    })
+    await vi.waitFor(() => {
+      expect(postMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 2, result: { delivered: true } }),
+        expect.anything(),
+      )
+    })
+  })
+
+  it('surfaces endpoint failures to the app as ui/message errors', async () => {
+    const { contentWindow } = attachIframe()
+    const postMessageSpy = vi.spyOn(contentWindow, 'postMessage')
+    const rpcCall = vi.fn(async () => ({ ok: false as const, error: { code: 'forbidden', message: 'App messages are disabled for this server', details: {} } }))
+    const handle = createBridgeLifecycle({ contentWindow, sessionToken: 'tok-1', rpcCall, hostInfo: { name: 'h', version: '0' } })
+    cleanups.push(() => handle.dispose(false))
+
+    postInitializeRequest(contentWindow, 1)
+    await vi.waitFor(() => expect(postMessageSpy).toHaveBeenCalled())
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'ui/message',
+        params: { role: 'user', content: [{ type: 'text', text: 'nope' }] },
+      },
+      source: contentWindow,
+    }))
+    await vi.waitFor(() => {
+      expect(postMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 3, error: expect.objectContaining({ message: 'App messages are disabled for this server' }) }),
+        expect.anything(),
+      )
+    })
+  })
 })
