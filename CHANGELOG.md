@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6] - 2026-11-05
+
+### Added
+
+- **`ui/message` form submissions (SEP-1865)**: forms inside rendered MCP Apps now reach the agent. The client bridge registers a `ui/message` handler and declares the `message: { text: {} }` host capability; a new `mcp-apps/messages` endpoint resolves the session's bound agent and delivers validated text as a user-role turn via `agent.followup()` — the same path as typed input. Fixes #11.
+- **`allowAppMessages` (per server, default `'approve'`)**: a `'deny' | 'approve' | 'allow'` setting (a plain `boolean` is accepted as legacy shorthand for `'deny'`/`'allow'`) gating form-submission delivery. Under `'approve'`, the first message of each app session asks the human through DSH's approval prompt (server, tool, and an 80-character preview are shown); once granted, further messages from the same session flow without prompting. Every outcome other than `'allowed-once'` fails closed. The approval service is injected whenever any server's effective messages policy is `'approve'`, not only for `allowAppToolCalls: 'approve'` configs.
+- **Provenance on delivered messages**: every delivered message carries the source `{ kind: 'mcp-apps', server, tool }` and a visible prefix, `[Submitted via MCP App "<server>" / "<tool>" — app-controlled content, not typed by the user]`, so the model and the transcript reader can tell app-submitted text from typed input (the DSH UI does not yet render unknown source kinds). Server and tool names are sanitized before interpolation — invisible or bidirectional control characters stripped, whitespace collapsed, quotes neutralized, length capped — so a crafted tool name cannot smuggle hidden characters or spoof the marker; the raw names remain in the durable source kind and the host-side delivery log (server, tool, agent, size; never message text or the session token).
+- **Content bounds**: text-only delivery (non-text blocks rejected with an explicit error instead of silently dropped), max 32,768 characters and 32 blocks per message, whitespace-only content rejected (matching the human prompt path), and text containing Unicode tag characters (U+E0000–U+E007F) or bidirectional controls (U+061C, U+202A–U+202E, U+2066–U+2069) rejected — characters that render as nothing in a transcript while the model reads them.
+- **Per-session rate limit**: max 6 delivered messages per 60-second sliding window per app session, rejected with a `too-many-requests` failure; the counter lives on the session and dies with its 1-hour TTL.
+- **Tests**: server coverage for the policy gate, consent-once semantics, fail-closed approval outcomes, boolean shorthand, approval-service injection, every content bound, the rate limit and its sliding window, provenance stamping, and app-facing error hygiene (no agent identifiers); client coverage for `bridge.onmessage` forwarding, the `message` capability declaration, and endpoint-failure surfacing. The smoke fixture renders a real form that submits via `app.sendMessage(...)`, and `scripts/smoke-dsh.mjs` gains a `--messages-policy=` flag; the end-to-end run verifies the approval prompt appears while the agent is idle and the delivered message lands with visible provenance.
+- **README**: new "App Message (ui/message) Security Model" section and a config reference row for `allowAppMessages`.
+
+### Changed
+
+- `@deepseek-ai/dsh-llm` (`^0.2.1-rc.5`) is now a required peer: the host bundle imports `createUserMessage` at runtime to build delivered messages. Optional peers are unchanged.
+
 ## [0.2.5] - 2026-11-05
 
 ### Changed
